@@ -1,0 +1,61 @@
+includes:
+  - headers/data.yaml
+  - headers/device.yaml
+  - headers/model.yaml
+  - headers/optimizer.yaml
+  - backbones/resnet12.yaml
+
+# data
+data_root: /root/autodl-tmp/...  # todo
+image_size: &image_size 32
+
+# training
+init_cls_num: &init_cls_num 10  # ?
+inc_cls_num: &inc_cls_num 10  # ?
+total_cls_num: &total_cls_num 100
+task_num: 10
+warmup: 1
+epoch: 5
+val_per_epoch: 15 # according to num_test in parse_option()
+train_batch_size: 32
+test_batch_size: 32
+
+# optimizer
+optimizer:
+  name: SGD  # todo
+  kwargs:
+    lr: 1e-3
+    momentum: 0.9  # todo
+    weight_decay: 0.0
+
+lr_scheduler:
+  name: MultiStepLR  # todo
+  kwargs:
+    gamma: 0.1
+    milestones: [80, 120]
+
+# model
+backbone:
+  name: clip  
+  kwargs:  
+    model_name : ViT-B/16
+    pretrained : True
+
+buffer:
+  name: LinearHerdingBuffer
+  kwargs:
+    buffer_size: 2000
+    batch_size: *train_batch_size
+
+classifier:  
+  name: CLAP4CLIP
+  kwargs:
+    num_class: *total_cls_num
+    init_cls_num: *init_cls_num
+    inc_cls_num: *inc_cls_num
+    feat_dim: 64
+    # no need?
+    dist: 0.5
+    lamda: 5
+    K: 2
+    lw_mr: 1
