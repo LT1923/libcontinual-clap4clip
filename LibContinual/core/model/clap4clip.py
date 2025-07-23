@@ -103,10 +103,11 @@ class CLIP(nn.Module):
                  mu_adapters=None, sigma_adapters=None, task_tokens=None,
                  task_to_cls_num=None, prompt_templates=None, previous_components=None,
                  task_to_distribution=None, mu_global_adapter=None, sigma_global_adapter=None,
-                 global_vga=None):
+                 global_vga=None, cur_task_idx=0):
         super().__init__()
         self.n_class = len(class_names)
         self.kwargs = kwargs
+        self.cur_task_idx = cur_task_idx
         # self.args = args
         # text encoder
         self.text_encoder = TextEncoder(clip_model)
@@ -310,11 +311,46 @@ class CLIP(nn.Module):
         return avg_distance
 
     def forward(self, image, labels=None, test=False, finetuning=False, return_mean=True, for_prior=None):
+        print(f"=== 调试信息 ===")
+        print(f"输入图像形状: {image.shape}")
+        print(f"输入图像数据类型: {image.dtype}")
+        print(f"输入图像设备: {image.device}")
+        
+        # 确保输入格式正确
+        if len(image.shape) == 3:
+            image = image.unsqueeze(0)
+            print(f"添加批次维度后: {image.shape}")
+        ############以上是调试信息##########    
+        
+        if image.shape[-1] != 224 or image.shape[-2] != 224:
+            print(f"调整图像尺寸从 {image.shape[-2:]} 到 (224, 224)")
+            image = torch.nn.functional.interpolate(
+                image, 
+                size=(224, 224), 
+                mode='bilinear', 
+                align_corners=False
+            )
+            print(f"调整后图像形状: {image.shape}")       
+        
         with torch.no_grad():
             image_features = self.image_encoder(image.type(self.dtype))
             image_features_normed = image_features / image_features.norm(dim=-1, keepdim=True)
             image_features = image_features_normed.detach()
             image_features_normed = image_features_normed.detach()
+            
+            
+                # 验证任务索引和相关属性
+        print(f"当前任务索引: {self.cur_task_idx}")
+        print(f"任务到类别数映射: {self.task_to_cls_num}")
+        print(f"总类别数: {self.n_class}")
+        
+        # 安全地计算 prev_cls_num
+        if self.cur_task_idx in self.task_to_cls_num:
+            prev_cls_num = self.n_class - self.task_to_cls_num[self.cur_task_idx]
+            print(f"前一任务类别数: {prev_cls_num}")
+        else:
+            prev_cls_num = 0
+            print(f"警告：任务 {self.cur_task_idx} 不在映射中，使用默认值 0")
 
         n_class = self.n_class
         prev_cls_num = self.n_class - self.task_to_cls_num[self.cur_task_idx]  # todo: self.cur_task_idx, should be maintained while training, not realize yet
@@ -620,7 +656,7 @@ class CLAP4CLIP(Finetune):
         self.previous_sigma_adapters, self.previous_sigma_global_adapter = None, None
         self.previous_task_tokens = None
         self.previous_vga = None
-        
+
         # fixed: task 索引的初始化
         self.cur_task_idx = 0
 
@@ -650,6 +686,14 @@ class CLAP4CLIP(Finetune):
     def observe(self, data):
         # todo: inherit all the logic from Finetune, or overwrite?
         # todo: 接口对齐
+        
+        
+        # 确保任务索引同步
+        if hasattr(self, 'model') and self.model is not None:
+            if self.model.cur_task_idx != self.cur_task_idx:
+                self.model.cur_task_idx = self.cur_task_idx
+                print(f"Synced model cur_task_idx to {self.cur_task_idx}")
+        
         x, y = data['image'], data['label']
         x = x.to(self.device)
         y = y.to(self.device)
@@ -677,12 +721,14 @@ class CLAP4CLIP(Finetune):
         return pred, acc / x.size(0)
 
     def before_task(self, task_idx, buffer, train_loader, test_loaders):
+        
+        self.update_task_idx(task_idx)# fixed: 任务索引更新
         # todo: check ok? 
         self.task_to_cls_num[task_idx] = len(train_loader.dataset.get_class_names())  # todo: why dataset has this attr--class_names
         self.current_class_names += train_loader.dataset.get_class_names()# fixed : dataset has no attribute named 'class_names'
-        # self.prompt_templates = train_loader.dataset.prompt_templates  # todo: 复杂。需要自己搓。不属于kwargs
+        # self.prompt_templates = train_loader.dataset.prompt_templates  # DONE: 复杂。需要自己搓。不属于kwargs
         self.prompt_templates = ["a photo of a {}."] # fixed: 相当于 cifar100 的 sigle templates, 还有 ensemble 方法没有实现
-        # TODO: 如何利用 clap4clip 对 cifar100 自定义的类别顺序？
+        # todo: 如何利用 clap4clip 对 cifar100 自定义的类别顺序？
         self.cur_task_idx = task_idx
 
         if len(train_loader.dataset)< self.kwargs["train_batch_size"]:
@@ -744,7 +790,7 @@ class CLAP4CLIP(Finetune):
             self.preserve_copy_for_distillation()
 
     def get_parameters(self, config):
-        # todo: see logic in paper
+        # DONE? see logic in paper
         #return filter(lambda p: p.requires_grad, self.model.parameters())
         
         train_parameters = []
@@ -784,7 +830,8 @@ class CLAP4CLIP(Finetune):
                           task_to_distribution=self.task_to_distribution,
                           mu_global_adapter=self.mu_global_adapter if self.kwargs["hierarchical"] else None,
                           sigma_global_adapter=self.sigma_global_adapter if self.kwargs["hierarchical"] else None,
-                           global_vga=self.vga_global
+                           global_vga=self.vga_global,
+                           cur_task_idx=cur_task_idx # to maintain current task index
                           )  # diy CLIP
         self.model.eval()
         if self.kwargs["use_grad_checkpoint"]:
@@ -795,6 +842,13 @@ class CLAP4CLIP(Finetune):
 
 
         self.build_optimizer(per_epoch_steps, lr=self.lr, warmup=True)
+        
+    def update_task_idx(self, task_idx):
+        """更新当前任务索引"""
+        self.cur_task_idx = task_idx
+        if hasattr(self, 'model') and self.model is not None:
+            self.model.cur_task_idx = task_idx
+            print(f"Updated cur_task_idx to {task_idx}")
     
     def finetuning(self, data):
         self.unfreeze_for_finetuning()
