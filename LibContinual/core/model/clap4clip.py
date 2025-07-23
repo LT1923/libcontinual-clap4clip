@@ -30,6 +30,7 @@ import errno
 
 # for data transform -- todo: should be merge into data part
 import torchvision.transforms as transforms
+from torch.utils.data import Dataset # for cifar dataset definition
 try:
     from torchvision.transforms import InterpolationMode
     BICUBIC = InterpolationMode.BICUBIC
@@ -627,6 +628,12 @@ class CLAP4CLIP(Finetune):
             mkdir_p(self.kwargs["save_path"])
         np.save(self.kwargs["checkpoint"] + "/seed.npy", self.kwargs["seed"])
         
+        # fixed: 没这个定义跑不了, args改成kwargs
+    def init_task_tokens(self, ctx_dim):
+        task_token = torch.zeros((1, 1,  ctx_dim), dtype=self.clip_model.dtype, requires_grad=True).cuda(device=self.kwargs["default_gpu"]) 
+        nn.init.normal_(task_token, std=.02)
+        self.task_tokens =  nn.ParameterList([nn.Parameter(task_token)]) if self.kwargs["expandable_tokens"] else None
+
     def observe(self, data):
         # todo: inherit all the logic from Finetune, or overwrite?
         # todo: 接口对齐
@@ -657,9 +664,9 @@ class CLAP4CLIP(Finetune):
         return pred, acc / x.size(0)
 
     def before_task(self, task_idx, buffer, train_loader, test_loaders):
-        # todo: check ok?
-        self.task_to_cls_num[task_idx] = len(train_loader.dataset.class_names)  # todo: why dataset has this attr--class_names
-        self.current_class_names += train_loader.dataset.class_names
+        # todo: check ok? not OK TwT
+        self.task_to_cls_num[task_idx] = len(train_loader.dataset.get_class_names())  # todo: why dataset has this attr--class_names
+        self.current_class_names += train_loader.dataset.get_class_names()# fixed : dataset has no attribute named 'class_names'
         self.prompt_templates = train_loader.dataset.prompt_templates  # todo: 复杂。需要自己搓。不属于kwargs
 
         if len(train_loader.dataset)< self.kwargs["train_batch_size"]:
@@ -722,7 +729,20 @@ class CLAP4CLIP(Finetune):
 
     def get_parameters(self, config):
         # todo: see logic in paper
-        return filter(lambda p: p.requires_grad, self.model.parameters())
+        #return filter(lambda p: p.requires_grad, self.model.parameters())
+        
+        train_parameters = []
+        
+        # fixed: 遍历所有参数，只选择需要梯度的参数
+        trainable_params = []
+        for name, param in self.named_parameters():
+            if param.requires_grad:
+                trainable_params.append(param)
+        
+        if trainable_params:
+            train_parameters.append({"params": trainable_params})
+        
+        return train_parameters
     
     def init_model(self, class_names, per_epoch_steps, prompt_templates=None):
         # todo: 逻辑要改。要接收cur_task_idx
@@ -775,7 +795,7 @@ class CLAP4CLIP(Finetune):
         self.build_optimizer(per_epoch_steps=per_epoch_steps, lr=self.lr/10., warmup=False, finetune=True)
         if self.model.vga is not None:
             self.model.vga.eval()
-        for epoch in tqdm(range(self.kwargs["finetune_epochs"]):
+        for epoch in tqdm(range(self.kwargs["finetune_epochs"])):
             for idx, (x, y, index) in tqdm(enumerate(memory_loader), total=len(memory_loader), desc = 'Finetuning'):
 
                 cur_iter_idx = epoch*per_epoch_steps+idx
@@ -834,3 +854,103 @@ class CLAP4CLIP(Finetune):
         else:
             self.mu_global_adapter = Adapter(ctx_dim, ctx_dim).cuda(device=self.kwargs["default_gpu"]).type(self.clip_model.dtype)
             self.sigma_global_adapter = Adapter(ctx_dim, ctx_dim, sigma=True).cuda(device=self.kwargs["default_gpu"]).type(self.clip_model.dtype)
+
+
+# ************* cifar 100 Dataset specific code *************
+
+class cifar100(Dataset):
+    # base_folder = 'cifar-100-python'
+    train_list=[
+        ['train', '16019d7e3df5f24257cddd939b257f8d'],
+    ]
+
+    test_list=[
+        ['test', 'foef6b0ae62326f3e7ffdfab6717acfc'],
+    ]
+    meta={
+        'filename':'meta',
+        'key': 'fine_label_names',
+        'md5':'7973b15100ade9c7d40fb424638fde48'
+    }
+
+    templates=[
+        'a photo of a {}.',
+        'a blurry photo of a {}.',
+        'a black and white photo of a {}.',
+        'a low contrast photo of a {}.',
+        'a high contrast photo of a {}.',
+        'a bad photo of a {}.',
+        'a good photo of a {}.',
+        'a photo of a small {}.',
+        'a photo of a big {}.',
+        'a photo of the {}.',
+        'a blurry photo of the {}.',
+        'a black and white photo of the {}.',
+        'a low contrast photo of the {}.',
+        'a high contrast photo of the {}.',
+        'a bad photo of the {}.',
+        'a good photo of the {}.',
+        'a photo of the small {}.',
+        'a photo of the big {}.',
+    ]
+
+
+    def __init__(self, root, transform=None, train=True):
+        self.root = root
+        self.train = train
+        self.transform = transform
+        self.base_folder = 'cifar-100-python'
+
+        if self.train:
+            downloaded_list = self.train_list 
+        else:
+            downloaded_list = self.test_list
+
+        self.data =[]
+        self.targets =[]
+        for file_name, checksum in downloaded_list:
+            file_path = os.path.join(self.root, self.base_folder, file_name)
+            with open(file_path, 'rb') as f:
+                entry = pickle.load(f, encoding='latin1')
+                self.data.append(entry['data'])
+                if 'labels' in entry:
+                    self.targets.extend(entry['labels'])
+                else:
+                    self.targets.extend(entry['fine_labels'])
+        self.data = np.vstack(self.data).reshape(-1, 3, 32, 32)
+        self.data = self.data.transpose((0, 2, 3, 1))# convert to HWC
+
+        self._load_meta()
+
+    def _load_meta(self) -> None:
+        path = os.path.join(self.root, self.base_folder, self.meta['filename'])
+        with open(path, 'rb') as infile:
+            data = pickle.load(infile, encoding='latin1')
+            self.classes = data[self.meta[ 'key']]
+        self.class_to_idx = {_class: i for i, _class in enumerate(self.classes)}
+
+    def __getitem__(self, index):
+        img, target = self.data[index], self.targets[index]
+        img = Image.fromarray(img)
+
+        if self.transform is not None:
+            img = self.transform(img)
+
+        return img,target,int(index)
+
+    def __len__(self):
+        return len(self.data)
+
+    def prompts(self, mode='single'):
+        if mode =='single':
+            prompts = [[self.templates[0].format(label)] for label in self.classes]
+            return prompts
+        elif mode == 'ensemble':
+            prompts = [[template.format(label) for template in self.templates] for label in self.classes]
+            return prompts
+
+    def get_labels(self):
+        return np.array(self.targets)
+
+    def get_classes(self):
+        return self.classes
