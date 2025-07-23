@@ -30,12 +30,15 @@ import errno
 
 # for data transform -- todo: should be merge into data part
 import torchvision.transforms as transforms
+from torch.utils.data import Dataset # for cifar dataset definition
 try:
     from torchvision.transforms import InterpolationMode
     BICUBIC = InterpolationMode.BICUBIC
 except ImportError:
     from PIL import Image
     BICUBIC = Image.BICUBIC
+    
+from ..utils.clap4clip_utils import build_cosine_scheduler, freeze_parameters
 
 class BufferDataset(Dataset):
     def __init__(self, images, labels, transform=None):
@@ -96,14 +99,16 @@ class TextEncoder(nn.Module):
 
 
 class CLIP(nn.Module):
-    def __init__(self, args, class_names, clip_model, vga,
+    def __init__(self, kwargs, class_names, clip_model, vga,
                  mu_adapters=None, sigma_adapters=None, task_tokens=None,
                  task_to_cls_num=None, prompt_templates=None, previous_components=None,
                  task_to_distribution=None, mu_global_adapter=None, sigma_global_adapter=None,
-                 global_vga=None, cur_task_idx = None):
+                 global_vga=None, cur_task_idx=0):
         super().__init__()
         self.cur_task_idx = cur_task_idx
         self.n_class = len(class_names)
+        self.kwargs = kwargs
+        self.cur_task_idx = cur_task_idx
         # self.args = args
         # text encoder
         self.text_encoder = TextEncoder(clip_model)
@@ -307,14 +312,49 @@ class CLIP(nn.Module):
         return avg_distance
 
     def forward(self, image, labels=None, test=False, finetuning=False, return_mean=True, for_prior=None):
+        print(f"=== 调试信息 ===")
+        print(f"输入图像形状: {image.shape}")
+        print(f"输入图像数据类型: {image.dtype}")
+        print(f"输入图像设备: {image.device}")
+        
+        # 确保输入格式正确
+        if len(image.shape) == 3:
+            image = image.unsqueeze(0)
+            print(f"添加批次维度后: {image.shape}")
+        ############以上是调试信息##########    
+        
+        if image.shape[-1] != 224 or image.shape[-2] != 224:
+            print(f"调整图像尺寸从 {image.shape[-2:]} 到 (224, 224)")
+            image = torch.nn.functional.interpolate(
+                image, 
+                size=(224, 224), 
+                mode='bilinear', 
+                align_corners=False
+            )
+            print(f"调整后图像形状: {image.shape}")       
+        
         with torch.no_grad():
             image_features = self.image_encoder(image.type(self.dtype))
             image_features_normed = image_features / image_features.norm(dim=-1, keepdim=True)
             image_features = image_features_normed.detach()
             image_features_normed = image_features_normed.detach()
+            
+            
+                # 验证任务索引和相关属性
+        print(f"当前任务索引: {self.cur_task_idx}")
+        print(f"任务到类别数映射: {self.task_to_cls_num}")
+        print(f"总类别数: {self.n_class}")
+        
+        # 安全地计算 prev_cls_num
+        if self.cur_task_idx in self.task_to_cls_num:
+            prev_cls_num = self.n_class - self.task_to_cls_num[self.cur_task_idx]
+            print(f"前一任务类别数: {prev_cls_num}")
+        else:
+            prev_cls_num = 0
+            print(f"警告：任务 {self.cur_task_idx} 不在映射中，使用默认值 0")
 
         n_class = self.n_class
-        prev_cls_num = self.n_class - self.task_to_cls_num[self.cur_task_idx]  # todo: self.cur_task_idx, should be maintained while training, not realize yet
+        prev_cls_num = self.n_class - self.task_to_cls_num[self.cur_task_idx]  # DONE: self.cur_task_idx, should be maintained while training, not realize yet
         logit_scale = self.logit_scale.exp()
         if test:
             with torch.no_grad():
@@ -575,6 +615,14 @@ class CLAP4CLIP(Finetune):
         super().__init__(backbone, feat_dim, num_class, **kwargs)
         # kwargs
         self.kwargs = kwargs
+        
+        # Optimization parameters
+        # fixed: 这是参数里的默认学习率
+        self.lr = kwargs.get('lr', 0.001)*kwargs.get('train_batch',32)/20
+        self.wd = kwargs.get('wd', 0.0)# default value for weight decay
+        self.epochs = kwargs.get('epochs', 5)  # default epochs
+        self.train_batch = kwargs.get('train_batch',32)  # default train batch size
+        self.test_batch = kwargs.get('test_batch', 32)  # default test batch size
 
         # device
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -611,6 +659,9 @@ class CLAP4CLIP(Finetune):
         self.previous_task_tokens = None
         self.previous_vga = None
 
+        # fixed: task 索引的初始化
+        self.cur_task_idx = 0
+
         # directories
         def mkdir_p(path):  # todo: this func should not be placed here, and should be written in utils files...
             '''make dir if not exist'''
@@ -628,9 +679,23 @@ class CLAP4CLIP(Finetune):
             mkdir_p(self.kwargs["save_path"])
         np.save(self.kwargs["checkpoint"] + "/seed.npy", self.kwargs["seed"])
         
+        # fixed: 没这个定义跑不了, args改成kwargs
+    def init_task_tokens(self, ctx_dim):
+        task_token = torch.zeros((1, 1,  ctx_dim), dtype=self.clip_model.dtype, requires_grad=True).cuda(device=self.kwargs["default_gpu"]) 
+        nn.init.normal_(task_token, std=.02)
+        self.task_tokens =  nn.ParameterList([nn.Parameter(task_token)]) if self.kwargs["expandable_tokens"] else None
+
     def observe(self, data):
         # todo: inherit all the logic from Finetune, or overwrite?
         # todo: 接口对齐
+        
+        
+        # 确保任务索引同步
+        if hasattr(self, 'model') and self.model is not None:
+            if self.model.cur_task_idx != self.cur_task_idx:
+                self.model.cur_task_idx = self.cur_task_idx
+                print(f"Synced model cur_task_idx to {self.cur_task_idx}")
+        
         x, y = data['image'], data['label']
         x = x.to(self.device)
         y = y.to(self.device)
@@ -658,11 +723,15 @@ class CLAP4CLIP(Finetune):
         return pred, acc / x.size(0)
 
     def before_task(self, task_idx, buffer, train_loader, test_loaders):
-        # todo: check ok?
+        
+        self.update_task_idx(task_idx)# fixed: 任务索引更新
+        # todo: check ok? 
+        self.task_to_cls_num[task_idx] = len(train_loader.dataset.get_class_names())  # todo: why dataset has this attr--class_names
+        self.current_class_names += train_loader.dataset.get_class_names()# fixed : dataset has no attribute named 'class_names'
+        # self.prompt_templates = train_loader.dataset.prompt_templates  # DONE: 复杂。需要自己搓。不属于kwargs
+        self.prompt_templates = ["a photo of a {}."] # fixed: 相当于 cifar100 的 sigle templates, 还有 ensemble 方法没有实现
+        # todo: 如何利用 clap4clip 对 cifar100 自定义的类别顺序？
         self.cur_task_idx = task_idx
-        self.task_to_cls_num[task_idx] = len(train_loader.dataset.class_names)  # todo: why dataset has this attr--class_names
-        self.current_class_names += train_loader.dataset.class_names
-        self.prompt_templates = train_loader.dataset.prompt_templates  # todo: 复杂。需要自己搓。不属于kwargs
 
         if len(train_loader.dataset)< self.kwargs["train_batch_size"]:
             real_img_bsz = len(train_loader.dataset)  
@@ -670,8 +739,8 @@ class CLAP4CLIP(Finetune):
             
         per_epoch_steps = len(train_loader)
 
-        self.init_model(class_names=self.current_class_names, per_epoch_steps=per_epoch_steps, prompt_templates=self.prompt_templates)
-        
+        self.init_model(class_names=self.current_class_names, cur_task_idx=self.cur_task_idx, per_epoch_steps=per_epoch_steps, prompt_templates=self.prompt_templates)
+
         if self.model.vga is not None:
             self.model.vga.train()
             
@@ -723,12 +792,25 @@ class CLAP4CLIP(Finetune):
             self.preserve_copy_for_distillation()
 
     def get_parameters(self, config):
-        # todo: see logic in paper
-        # return filter(lambda p: p.requires_grad, self.model.parameters())
-        return filter(lambda p: p.requires_grad, self.clip_model.parameters())
-
-    def init_model(self, class_names, per_epoch_steps, prompt_templates=None):
-        if self.cur_task_idx > 0:  # current task idx.
+        # DONE? see logic in paper
+        #return filter(lambda p: p.requires_grad, self.model.parameters())
+        
+        train_parameters = []
+        
+        # fixed: 遍历所有参数，只选择需要梯度的参数
+        trainable_params = []
+        for name, param in self.named_parameters():
+            if param.requires_grad:
+                trainable_params.append(param)
+        
+        if trainable_params:
+            train_parameters.append({"params": trainable_params})
+        
+        return train_parameters
+    
+    def init_model(self, class_names, cur_task_idx, per_epoch_steps, prompt_templates=None):
+        # DONE: 逻辑要改? 要接收cur_task_idx 
+        if cur_task_idx > 0:  # current task idx.
             freeze_parameters(self.vga, requires_grad=True)
             if self.kwargs["expandable_tokens"]:
                 self.expand_task_token_list()
@@ -743,14 +825,15 @@ class CLAP4CLIP(Finetune):
                                  self.previous_mu_adapters, self.previous_sigma_adapters, 
                                  self.previous_task_tokens, self.previous_vga, 
                                  self.previous_mu_global_adapter, self.previous_sigma_global_adapter )
-        self.model = CLIP(self.kwargs, class_names, clip_model, self.vga,
+        self.model = CLIP(kwargs=self.kwargs, class_names=class_names, clip_model=clip_model, vga=self.vga,
                           mu_adapters=self.mu_adapters, sigma_adapters=self.sigma_adapters,
                           task_tokens=self.task_tokens, task_to_cls_num = self.task_to_cls_num,
                           prompt_templates=prompt_templates, previous_components=prev_model_components,
                           task_to_distribution=self.task_to_distribution,
                           mu_global_adapter=self.mu_global_adapter if self.kwargs["hierarchical"] else None,
                           sigma_global_adapter=self.sigma_global_adapter if self.kwargs["hierarchical"] else None,
-                           global_vga=self.vga_global, cur_task_idx = self.cur_task_idx
+                           global_vga=self.vga_global,
+                           cur_task_idx=cur_task_idx # to maintain current task index
                           )  # diy CLIP
         self.model.eval()
         if self.kwargs["use_grad_checkpoint"]:
@@ -761,6 +844,13 @@ class CLAP4CLIP(Finetune):
 
 
         self.build_optimizer(per_epoch_steps, lr=self.lr, warmup=True)
+        
+    def update_task_idx(self, task_idx):
+        """更新当前任务索引"""
+        self.cur_task_idx = task_idx
+        if hasattr(self, 'model') and self.model is not None:
+            self.model.cur_task_idx = task_idx
+            print(f"Updated cur_task_idx to {task_idx}")
     
     def finetuning(self, data):
         self.unfreeze_for_finetuning()
@@ -810,6 +900,34 @@ class CLAP4CLIP(Finetune):
         if self.kwargs.sess > 0 and self.kwargs.expandable_tokens:
             self.epoch_log()
     
+    # fixed: 没有这个方法跑不起来，但是可以照搬吗？        
+    def build_optimizer(self, per_epoch_steps, lr, warmup=False, finetune=False):
+        for name, param in self.model.named_parameters():
+            if "vga" not in name and "task_token" not in name and "adapter" not in name:
+                param.requires_grad_(False)
+            
+        # double check
+        enabled = set()
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                enabled.add(name)
+
+        print(f"\nParameters to be updated: {sorted(enabled)}\n")
+
+        param_dict = [{'params': [p for p in self.model.parameters() if p.requires_grad]}]
+
+        self.optimizer = torch.optim.SGD(param_dict, lr=lr, weight_decay=self.wd)
+        total_step=self.epochs*per_epoch_steps if not finetune else self.args.finetune_epochs*per_epoch_steps
+        warmup_steps = int(0.3 * total_step) if warmup else 0
+        self.scheduler = build_cosine_scheduler(
+            self.optimizer,
+            lr=lr,
+            total_step=total_step,
+            lr_warmup_step=warmup_steps
+            )
+        
+
+    
     @torch.no_grad()
     def preserve_copy_for_distillation(self):
         self.model.eval()
@@ -837,7 +955,102 @@ class CLAP4CLIP(Finetune):
             self.mu_global_adapter = Adapter(ctx_dim, ctx_dim).cuda(device=self.kwargs["default_gpu"]).type(self.clip_model.dtype)
             self.sigma_global_adapter = Adapter(ctx_dim, ctx_dim, sigma=True).cuda(device=self.kwargs["default_gpu"]).type(self.clip_model.dtype)
 
-    def init_task_tokens(self, ctx_dim):
-        task_token = torch.zeros((1, 1,  ctx_dim), dtype=self.clip_model.dtype, requires_grad=True).cuda(device=self.kwargs["default_gpu"])
-        nn.init.normal_(task_token, std=.02)
-        self.task_tokens =  nn.ParameterList([nn.Parameter(task_token)]) if self.kwargs["expandable_tokens"] else None
+
+# ************* cifar 100 Dataset specific code *************
+
+class cifar100(Dataset):
+    # base_folder = 'cifar-100-python'
+    train_list=[
+        ['train', '16019d7e3df5f24257cddd939b257f8d'],
+    ]
+
+    test_list=[
+        ['test', 'foef6b0ae62326f3e7ffdfab6717acfc'],
+    ]
+    meta={
+        'filename':'meta',
+        'key': 'fine_label_names',
+        'md5':'7973b15100ade9c7d40fb424638fde48'
+    }
+
+    templates=[
+        'a photo of a {}.',
+        'a blurry photo of a {}.',
+        'a black and white photo of a {}.',
+        'a low contrast photo of a {}.',
+        'a high contrast photo of a {}.',
+        'a bad photo of a {}.',
+        'a good photo of a {}.',
+        'a photo of a small {}.',
+        'a photo of a big {}.',
+        'a photo of the {}.',
+        'a blurry photo of the {}.',
+        'a black and white photo of the {}.',
+        'a low contrast photo of the {}.',
+        'a high contrast photo of the {}.',
+        'a bad photo of the {}.',
+        'a good photo of the {}.',
+        'a photo of the small {}.',
+        'a photo of the big {}.',
+    ]
+
+
+    def __init__(self, root, transform=None, train=True):
+        self.root = root
+        self.train = train
+        self.transform = transform
+        self.base_folder = 'cifar-100-python'
+
+        if self.train:
+            downloaded_list = self.train_list 
+        else:
+            downloaded_list = self.test_list
+
+        self.data =[]
+        self.targets =[]
+        for file_name, checksum in downloaded_list:
+            file_path = os.path.join(self.root, self.base_folder, file_name)
+            with open(file_path, 'rb') as f:
+                entry = pickle.load(f, encoding='latin1')
+                self.data.append(entry['data'])
+                if 'labels' in entry:
+                    self.targets.extend(entry['labels'])
+                else:
+                    self.targets.extend(entry['fine_labels'])
+        self.data = np.vstack(self.data).reshape(-1, 3, 32, 32)
+        self.data = self.data.transpose((0, 2, 3, 1))# convert to HWC
+
+        self._load_meta()
+
+    def _load_meta(self) -> None:
+        path = os.path.join(self.root, self.base_folder, self.meta['filename'])
+        with open(path, 'rb') as infile:
+            data = pickle.load(infile, encoding='latin1')
+            self.classes = data[self.meta[ 'key']]
+        self.class_to_idx = {_class: i for i, _class in enumerate(self.classes)}
+
+    def __getitem__(self, index):
+        img, target = self.data[index], self.targets[index]
+        img = Image.fromarray(img)
+
+        if self.transform is not None:
+            img = self.transform(img)
+
+        return img,target,int(index)
+
+    def __len__(self):
+        return len(self.data)
+
+    def prompts(self, mode='single'):
+        if mode =='single':
+            prompts = [[self.templates[0].format(label)] for label in self.classes]
+            return prompts
+        elif mode == 'ensemble':
+            prompts = [[template.format(label) for template in self.templates] for label in self.classes]
+            return prompts
+
+    def get_labels(self):
+        return np.array(self.targets)
+
+    def get_classes(self):
+        return self.classes
