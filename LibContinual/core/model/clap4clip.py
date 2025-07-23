@@ -71,11 +71,19 @@ class Adapter(nn.Module):
         self.fc = nn.Sequential(nn.Linear(in_dim, out_dim))
         self.sigma = sigma
         # init_weights(self.fc)
+        
+        print("sigma:",self.sigma,self.fc.parameters)
 
     def forward(self, x):
+        print("x:",x)
         if self.sigma:
+            print("sigma")
+            print("fc:", self.fc(x))
+            print("softplus:",F.softplus(self.fc(x)))
             return F.softplus(self.fc(x)) * 0.999 + 0.001
         else:
+            print("no sigma")
+            print(self.fc(x))
             return self.fc(x)
 
 
@@ -634,6 +642,7 @@ class CLAP4CLIP(Finetune):
             clip_model.float()
         self.clip_model = clip_model  # not equal to self.model, which is defined in self.init_model()
         ctx_dim = self.clip_model.ln_final.weight.shape[0]
+        # print("ctx_dim in self.clip_model in ClClipVar:",ctx_dim)  # 512
 
         self.kwargs["lr"] = kwargs["lr"] * self.kwargs["train_batch_size"] / 20
         self.current_class_names = []
