@@ -3,22 +3,30 @@ includes:
   - headers/device.yaml
   - headers/model.yaml
   - headers/optimizer.yaml
-  - backbones/resnet12.yaml
+
+device_ids: 0
+n_gpu: 1
+default_gpu: 0
 
 # data
-data_root: /root/autodl-tmp/...  # todo
+data_root: /root/autodl-tmp/ml_lab/data/cifar100/
 image_size: &image_size 32
+num_workers: 8
+dataset: cifar100
+save_path: ./
+
 
 # training
-init_cls_num: &init_cls_num 10  # ?
-inc_cls_num: &inc_cls_num 10  # ?
+init_cls_num: &init_cls_num 10
+inc_cls_num: &inc_cls_num 10
 total_cls_num: &total_cls_num 100
 task_num: 10
 warmup: 1
 epoch: 5
-val_per_epoch: 15 # according to num_test in parse_option()
-train_batch_size: 32
+val_per_epoch: 5 # according to num_test in parse_option()
+train_batch_size: &train_batch_size 32
 test_batch_size: 32
+seed: 0
 
 # optimizer
 optimizer:
@@ -37,25 +45,65 @@ lr_scheduler:
 # model
 backbone:
   name: clip  
-  kwargs:  
-    model_name : ViT-B/16
-    pretrained : True
+  kwargs: 
+    model_name: ViT-B/16
+    pretrained: True
 
 buffer:
   name: LinearHerdingBuffer
   kwargs:
     buffer_size: 2000
     batch_size: *train_batch_size
+    strategy: herding
 
-classifier:  
+classifier: 
   name: CLAP4CLIP
   kwargs:
+    # for LibContinual
     num_class: *total_cls_num
     init_cls_num: *init_cls_num
     inc_cls_num: *inc_cls_num
     feat_dim: 64
-    # no need?
+
+    # for CLAP4CLIP
+    default_gpu: 0
+    use_float32: False
+    use_grad_checkpoint: False
+    use_vga: True
+    hierarchical: False
+    train_batch_size:  *train_batch_size
+    ckpt_path: todo
+    checkpoint: ckpt/
+    save_path: save/
+    seed: 0 # todo: 两个seed用法一致吗？
+    variational: True
+    total_cls_num: *total_cls_num
+    finetune: True
+    distill: False
+    expandable_tokens: False
+    expandable_adapter: True
+    expandable_prompt: False
+    forward_times: 20
+    forward_times_global: 10
+    context_size: 0.67
+    compute_ram: False
+    use_np_prior: False
+    lasp: True
+    beta: 15.
+    get_interclass_dist: False
+    ortho_loss: False
+    get_adapter_distances: False
+
+    # maybe useless
+    lr: 0.1
+    wd: 0
     dist: 0.5
     lamda: 5
     K: 2
     lw_mr: 1
+
+
+
+
+
+

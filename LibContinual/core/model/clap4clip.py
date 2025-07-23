@@ -18,13 +18,24 @@ from torch.utils.data import Dataset, DataLoader
 
 import numpy as np
 
-from mammoth.models.slca_utils.base import batch_size
 from .finetune import Finetune
 from .backbone.clip import load, tokenize
 from tqdm import tqdm
 from copy import deepcopy
 import pickle
 import random
+
+import os
+import errno
+
+# for data transform -- todo: should be merge into data part
+import torchvision.transforms as transforms
+try:
+    from torchvision.transforms import InterpolationMode
+    BICUBIC = InterpolationMode.BICUBIC
+except ImportError:
+    from PIL import Image
+    BICUBIC = Image.BICUBIC
 
 class BufferDataset(Dataset):
     def __init__(self, images, labels, transform=None):
@@ -92,11 +103,11 @@ class CLIP(nn.Module):
                  global_vga=None):
         super().__init__()
         self.n_class = len(class_names)
-        self.args = args
+        # self.args = args
         # text encoder
         self.text_encoder = TextEncoder(clip_model)
         if torch.cuda.device_count() > 1:
-            self.text_encoder = nn.DataParallel(self.text_encoder, device_ids=args.gpus)
+            self.text_encoder = nn.DataParallel(self.text_encoder, device_ids=self.kwargs["default_gpu"])
 
         self.current_class_names = class_names
         # prompt learner
@@ -116,8 +127,8 @@ class CLIP(nn.Module):
         self.mu_global_adapter = mu_global_adapter
         self.sigma_global_adapter = sigma_global_adapter
 
-        self.forward_times = self.args.forward_times
-        self.forward_times_global = self.args.forward_times_global
+        self.forward_times = self.kwargs["forward_times"]
+        self.forward_times_global = self.kwargs["forward_times_global"]
 
         self.task_tokens = task_tokens
         self.task_to_cls_num = task_to_cls_num
@@ -164,7 +175,7 @@ class CLIP(nn.Module):
                    self.current_class_names]
         text_features_, text_features_per_prompt = [], []
         for per_cls_prompts in prompts:
-            per_cls_prompt_embs = tokenize(per_cls_prompts).cuda(device=self.args.default_gpu)  # t_c(p)
+            per_cls_prompt_embs = tokenize(per_cls_prompts).cuda(device=self.kwargs["default_gpu"])  # t_c(p)
             text_features = self.pretrained_text_encoder(per_cls_prompt_embs)  # g(t_c(p))
             text_features = text_features / text_features.norm(dim=-1, keepdim=True)  # g(t_c(p))
             text_features_per_prompt.append(text_features)
@@ -193,7 +204,7 @@ class CLIP(nn.Module):
             image_features = (image_features / image_features.norm(dim=-1, keepdim=True)).detach()
         vga_features = self.vga(text_features.clone().unsqueeze(0), image_features.unsqueeze(0)).squeeze(0)
         text_featues_ = vga_features + text_features
-        pdist = self.get_variational_adapter_features(text_featues_, task_num if self.args.expandable_adapter else 0)
+        pdist = self.get_variational_adapter_features(text_featues_, task_num if self.kwargs["expandable_adapter"] else 0)
         return pdist
 
     def get_prior_dist(self, image_features=None, text_features=None, batch_labels=None, task_num=None,
@@ -221,7 +232,7 @@ class CLIP(nn.Module):
 
         context_indices = get_context_indices(image_features.size(0), batch_labels,
                                               task_specific_labels if task_num > 0 else None,
-                                              context_size=self.args.context_size)
+                                              context_size=self.kwargs["context_size"])
         if len(context_indices) == 0:
             # no task-specific data points so resort to standard normal prior
             return Normal(torch.zeros_like(text_features), torch.ones_like(text_features))
@@ -235,7 +246,7 @@ class CLIP(nn.Module):
             if task_token is not None:
                 text_features_ = text_features_ + vga_features[-1]
             pdist = self.get_variational_adapter_features(text_features_,
-                                                          task_num if self.args.expandable_adapter else 0,
+                                                          task_num if self.kwargs["expandable_adapter"] else 0,
                                                           global_adapter=global_adapter)
 
         return pdist
@@ -262,8 +273,8 @@ class CLIP(nn.Module):
         False True False False False
         True False False False False
         """
-        mask = torch.zeros(attn_shape, dtype=torch.bool).cuda(device=self.args.default_gpu)
-        if self.args.expandable_tokens:
+        mask = torch.zeros(attn_shape, dtype=torch.bool).cuda(device=self.kwargs["default_gpu"])
+        if self.kwargs["expandable_tokens"]:
             for i in range(nb_task_tokens):
                 mask[original_query_num + i, original_query_num:original_query_num + i] = True
                 mask[original_query_num + i, original_query_num + i + 1:original_query_num + nb_task_tokens] = True
@@ -276,9 +287,9 @@ class CLIP(nn.Module):
             for cls in curr_class_indices:
                 mask[cls][:start_cls_idx] = True
                 mask[cls][end_cls_idx:] = True
-                if self.args.expandable_tokens:
+                if self.kwargs["expandable_tokens"]:
                     mask[cls][original_query_num + i] = False
-            if self.args.expandable_tokens:
+            if self.kwargs["expandable_tokens"]:
                 mask[original_query_num + i, :start_cls_idx] = True
                 mask[original_query_num + i, end_cls_idx:original_query_num] = True
         return mask
@@ -302,7 +313,7 @@ class CLIP(nn.Module):
             image_features_normed = image_features_normed.detach()
 
         n_class = self.n_class
-        prev_cls_num = self.n_class - self.task_to_cls_num[self.args.sess]
+        prev_cls_num = self.n_class - self.task_to_cls_num[self.cur_task_idx]  # todo: self.cur_task_idx, should be maintained while training, not realize yet
         logit_scale = self.logit_scale.exp()
         if test:
             with torch.no_grad():
@@ -310,17 +321,17 @@ class CLIP(nn.Module):
                 context = image_features_normed.clone()  # torch.cat([image_features.unsqueeze(0), self.task_token_two[-1]], 1)
                 n_query = text_features.shape[0]
                 query = text_features.clone().unsqueeze(0)
-                if self.args.expandable_tokens:
+                if self.kwargs["expandable_tokens"]:
                     query = torch.cat([query] + [token for token in self.task_tokens], 1)
-                attn_mask = self.get_attention_mask((query.shape[1], query.shape[1]), self.args.sess + 1,
+                attn_mask = self.get_attention_mask((query.shape[1], query.shape[1]), self.cur_task_idx + 1,
                                                     text_features.shape[0])
-                if self.args.use_vga:
+                if self.kwargs["use_vga"]:
                     vga_features = self.vga(query, context.unsqueeze(0), tgt_mask=attn_mask).squeeze(0)
 
                 rsamples_g = None
-                if self.args.hierarchical:
+                if self.kwargs["hierarchical"]:
                     # vga_features_global = self.vga(query, context.unsqueeze(0)).squeeze(0)
-                    global_input_features = vga_features[:n_query] if self.args.use_vga else text_features
+                    global_input_features = vga_features[:n_query] if self.kwargs["use_vga"] else text_features
                     global_input_features = global_input_features + text_features
                     qdist_g = self.get_variational_adapter_features(global_input_features, global_adapter=True)
                     rsamples_g = qdist_g.rsample([self.forward_times_global])
@@ -328,28 +339,28 @@ class CLIP(nn.Module):
                 logits = []
                 samplewise_text_feats = []
                 start_cls_idx, end_cls_idx = 0, 0
-                for i in range(self.args.sess + 1):
+                for i in range(self.cur_task_idx + 1):  # todo: all self.cur_task_idx maybe equal to self.cur_task_idx. to be check
                     start_cls_idx = end_cls_idx
                     end_cls_idx += self.task_to_cls_num[i]
                     text_features_relevant = text_features[start_cls_idx:end_cls_idx].clone()
                     text_features_ = text_features_relevant
-                    if self.args.use_vga:
+                    if self.kwargs["use_vga"]:
                         text_features_ = text_features_ + vga_features[start_cls_idx:end_cls_idx]
-                    if self.args.expandable_tokens:
+                    if self.kwargs["expandable_tokens"]:
                         text_features_ = text_features_ + vga_features[n_query + i]
 
-                    if self.args.hierarchical:
+                    if self.kwargs["hierarchical"]:
                         text_features_ = text_features_.unsqueeze(0).expand(self.forward_times_global, -1,
                                                                             -1) + rsamples_g[:,
                                                                                   start_cls_idx:end_cls_idx, :]
                     qdist = self.get_variational_adapter_features(text_features_,
-                                                                  i if self.args.expandable_adapter else 0)
+                                                                  i if self.kwargs["expandable_adapter"] else 0)
                     rsamples = qdist.rsample([self.forward_times])
 
                     text_features_ = text_features_.unsqueeze(0).expand(self.forward_times, -1, -1,
-                                                                        -1) if self.args.hierarchical else text_features_.unsqueeze(
+                                                                        -1) if self.kwargs["hierarchical"] else text_features_.unsqueeze(
                         0).expand(self.forward_times, -1, -1)
-                    if self.args.hierarchical:
+                    if self.kwargs["hierarchical"]:
                         rsamples = rsamples.flatten(0, 1)
                         text_features_ = text_features_.flatten(0, 1)
                     text_features_ = rsamples + text_features_
@@ -357,12 +368,12 @@ class CLIP(nn.Module):
                     logits_ = logit_scale * image_features_normed @ text_features_.permute(0, 2, 1)
 
                     logits.append(logits_)
-                    if self.args.compute_ram:
+                    if self.kwargs["compute_ram"]:
                         samplewise_text_feats.append(text_features_relevant)
                 # logits = torch.stack(logits, 0).sum(0)
                 logits = torch.cat(logits, -1)
                 logits = logits.detach()
-            if self.args.compute_ram:
+            if self.kwargs["compute_ram"]:
                 visual_feats = image_features_normed
                 samplewise_text_feats = torch.cat(samplewise_text_feats, 0)
                 samplewise_text_feats = samplewise_text_feats / samplewise_text_feats.norm(dim=-1, keepdim=True)
@@ -383,44 +394,44 @@ class CLIP(nn.Module):
             context = image_features_normed.clone()
             n_query = text_features.shape[0]
             query = text_features.clone().unsqueeze(0)
-            if self.args.expandable_tokens:
+            if self.kwargs["expandable_tokens"]:
                 query = torch.cat([query] + [token for token in self.task_tokens], 1)
-            attn_mask = self.get_attention_mask((query.shape[1], query.shape[1]), self.args.sess + 1,
+            attn_mask = self.get_attention_mask((query.shape[1], query.shape[1]), self.cur_task_idx + 1,
                                                 text_features.shape[0])
-            if self.args.use_vga:
+            if self.kwargs["use_vga"]:
                 vga_features_all = self.vga(query, context.unsqueeze(0), tgt_mask=attn_mask).squeeze(0)
 
             rsamples_g = None
-            if self.args.hierarchical:
+            if self.kwargs["hierarchical"]:
                 # vga_features_global = self.vga(query, context.unsqueeze(0)).squeeze(0)
-                global_input_features = vga_features_all[:n_query] if self.args.use_vga else text_features
+                global_input_features = vga_features_all[:n_query] if self.kwargs["use_vga"] else text_features
                 global_input_features = global_input_features + text_features
-                pdist_g = self.get_prior_dist(context, global_input_features, labels, self.args.sess + 1,
+                pdist_g = self.get_prior_dist(context, global_input_features, labels, self.cur_task_idx + 1,
                                               None,
                                               None,
-                                              use_np_prior=self.args.use_np_prior if not finetuning else False,
+                                              use_np_prior=self.kwargs["use_np_prior"] if not finetuning else False,
                                               global_adapter=True
                                               )
                 qdist_g = self.get_variational_adapter_features(global_input_features, global_adapter=True)
                 # pdist_g = self.get_prior_dist(text_features=global_input_features, use_np_prior=False)
                 prior_matching_losses.append(kl_divergence(qdist_g, pdist_g).mean(0).sum() * 0.001)
                 rsamples_g = qdist_g.rsample([self.forward_times_global])
-                if self.args.lasp and self.args.beta > 0:
+                if self.kwargs["lasp"] and self.kwargs["beta"] > 0:
                     prior_text_features = self.frozen_text_features_individual.clone()
                     sims = torch.stack([prior_text_features @ rsamples_g[r].t() for r in range(rsamples_g.shape[0])], 0)
                     sims = sims.mean(2).mean(0)
                     kl_losses.append(F.cross_entropy(sims, torch.arange(sims.size(0)).cuda(
-                        device=self.args.default_gpu)) * self.args.beta)
+                        device=self.kwargs["default_gpu"])) * self.kwargs["beta"])
 
-            if self.args.distill and self.args.sess > 0 and self.args.alpha > 0:
+            if self.kwargs["distill"] and self.cur_task_idx > 0 and self.kwargs["alpha"] > 0:
                 with torch.no_grad():
-                    prev_task_text_features = text_features[:-self.task_to_cls_num[self.args.sess]].clone()
+                    prev_task_text_features = text_features[:-self.task_to_cls_num[self.cur_task_idx]].clone()
                     n_query_prev = prev_task_text_features.shape[0]
                     prev_vga_query = prev_task_text_features.unsqueeze(0)
-                    if self.args.expandable_tokens:
+                    if self.kwargs["expandable_tokens"]:
                         prev_vga_query = torch.cat([prev_vga_query] + [token for token in self.previous_task_tokens], 1)
                     prev_attn_mask = self.get_attention_mask((prev_vga_query.shape[1], prev_vga_query.shape[1]),
-                                                             self.args.sess, prev_task_text_features.shape[0])
+                                                             self.cur_task_idx, prev_task_text_features.shape[0])
                     prev_vga_features_all = self.previous_vga(prev_vga_query, context.unsqueeze(0),
                                                               tgt_mask=prev_attn_mask).squeeze(0).detach()
                     prev_global_input_features = prev_vga_features_all[:n_query_prev] + prev_task_text_features
@@ -432,7 +443,7 @@ class CLIP(nn.Module):
             per_sample_text_feats = []
             taskwise_means = []
 
-            for i in range(self.args.sess + 1):
+            for i in range(self.cur_task_idx + 1):
 
                 start_cls_idx = end_cls_idx
                 end_cls_idx += self.task_to_cls_num[i]
@@ -442,65 +453,65 @@ class CLIP(nn.Module):
                         dict(zip(np.arange(start_cls_idx, end_cls_idx), [i] * (end_cls_idx - start_cls_idx))))
 
                 text_features_relevant = text_features.clone()[start_cls_idx:end_cls_idx]
-                if self.args.use_vga:
+                if self.kwargs["use_vga"]:
                     vga_features = vga_features_all[start_cls_idx:end_cls_idx]
-                    if self.args.expandable_tokens:
+                    if self.kwargs["expandable_tokens"]:
                         vga_features = vga_features + vga_features_all[n_query + i]
                     text_features_ = text_features_relevant + vga_features
                 else:
                     text_features_ = text_features_relevant
 
-                if self.args.hierarchical:
+                if self.kwargs["hierarchical"]:
                     text_features_ = text_features_.unsqueeze(0).expand(self.forward_times_global, -1, -1) + rsamples_g[
                                                                                                              :,
                                                                                                              start_cls_idx:end_cls_idx,
                                                                                                              :]
-                qdist = self.get_variational_adapter_features(text_features_, i if self.args.expandable_adapter else 0)
+                qdist = self.get_variational_adapter_features(text_features_, i if self.kwargs["expandable_adapter"] else 0)
                 rsamples = qdist.rsample([self.forward_times])
 
                 text_features_ = text_features_.unsqueeze(0).expand(self.forward_times, -1, -1,
-                                                                    -1) if self.args.hierarchical else text_features_.unsqueeze(
+                                                                    -1) if self.kwargs["hierarchical"] else text_features_.unsqueeze(
                     0).expand(self.forward_times, -1, -1)
-                if self.args.hierarchical:
+                if self.kwargs["hierarchical"]:
                     rsamples = rsamples.flatten(0, 1)
                     text_features_ = text_features_.flatten(0, 1)
                 text_features_ = rsamples + text_features_
 
                 taskwise_means.append(rsamples.mean(0))
-                if self.args.lasp and self.args.beta > 0 and (finetuning or (not finetuning and self.args.sess == i)):
+                if self.kwargs["lasp"] and self.kwargs["beta"] > 0 and (finetuning or (not finetuning and self.cur_task_idx == i)):
                     prior_text_features = self.frozen_text_features_individual.clone()[start_cls_idx:end_cls_idx]
                     sims = torch.stack([prior_text_features @ rsamples[r].t() for r in range(rsamples.shape[0])], 0)
                     sims = sims.mean(2).mean(0)
                     kl_losses.append(F.cross_entropy(sims, torch.arange(sims.size(0)).cuda(
-                        device=self.args.default_gpu)) * self.args.beta)
+                        device=self.kwargs["default_gpu"])) * self.kwargs["beta"])
                 logits_ = (logit_scale * image_features_normed @ text_features_.permute(0, 2, 1))
-                if finetuning or (not finetuning and self.args.sess == i):
-                    if self.args.frozen_prior:
+                if finetuning or (not finetuning and self.cur_task_idx == i):
+                    if self.kwargs["frozen_prior"]:
                         prior_text_features = self.frozen_text_features_individual.clone()[start_cls_idx:end_cls_idx]
                         pdist = self.get_variational_adapter_features(prior_text_features.mean(1),
-                                                                      i if self.args.expandable_adapter else 0)
+                                                                      i if self.kwargs["expandable_adapter"] else 0)
                     else:
                         pdist = self.get_prior_dist(context, text_features_relevant, labels, i,
                                                     None,
-                                                    self.task_tokens[i] if self.args.expandable_tokens else None,
-                                                    use_np_prior=self.args.use_np_prior,
+                                                    self.task_tokens[i] if self.kwargs["expandable_tokens"] else None,
+                                                    use_np_prior=self.kwargs["use_np_prior"],
                                                     # if not finetuning else False,
                                                     tgt_mask=attn_mask
                                                     )
                     prior_matching_losses.append(kl_divergence(qdist, pdist).mean(0).sum() * 0.001)
 
                 logits.append(logits_)
-                if (self.args.get_interclass_dist and self.args.sess == 9 and finetuning) or (
-                        self.args.get_adapter_distances and self.args.sess > 0):
+                if (self.kwargs["get_interclass_dist"] and self.cur_task_idx == 9 and finetuning) or (
+                        self.kwargs["get_adapter_distances"] and self.cur_task_idx > 0):
                     with torch.no_grad():
                         per_sample_text_feats.append(rsamples.clone().detach().mean(0))
 
-            if self.args.ortho_loss and self.args.sess >= 0:
+            if self.kwargs["ortho_loss"] and self.cur_task_idx >= 0:
                 taskwise_means = torch.cat(taskwise_means)
                 # taskwise_means = taskwise_means / taskwise_means.norm(dim=-1, keepdim=True)
                 sims = taskwise_means @ taskwise_means.t()
                 kl_losses.append(
-                    F.cross_entropy(sims, torch.arange(sims.size(0)).cuda(device=self.args.default_gpu)) * 5)
+                    F.cross_entropy(sims, torch.arange(sims.size(0)).cuda(device=self.kwargs["default_gpu"])) * 5)
 
             logits = torch.cat(logits, -1)
 
@@ -509,12 +520,12 @@ class CLIP(nn.Module):
             # prior_matching_loss = prior_matching_loss * 0.01 #if not finetuning else prior_matching_loss * 0.1
 
             avg_cos_distance = None
-            if self.args.get_adapter_distances and self.args.sess > 0:
+            if self.kwargs["get_adapter_distances"] and self.cur_task_idx > 0:
                 with torch.no_grad():
                     per_sample_text_feats_ = torch.stack(per_sample_text_feats, 0)
                     avg_cos_distance = self.get_avg_inter_adapter_distance(per_sample_text_feats_)
 
-            if self.args.get_interclass_dist and self.args.sess == 9 and finetuning:
+            if self.kwargs["get_interclass_dist"] and self.cur_task_idx == 9 and finetuning:
                 with torch.no_grad():
                     per_sample_text_feats_ = torch.cat(per_sample_text_feats, 0)
                     for label in np.arange(per_sample_text_feats_.shape[0]):
@@ -561,31 +572,31 @@ class CLIP(nn.Module):
 class CLAP4CLIP(Finetune):
     def __init__(self, backbone, feat_dim, num_class, **kwargs):
         super().__init__(backbone, feat_dim, num_class, **kwargs)
-        # todo: add attributes of clap4clip
-        self.ckpt_path = kwargs["ckpt_path"]
-        self.default_gpu = kwargs["default_gpu"]
-        # clip_model, _ = load(self.ckpt_path, device=f"cuda:{self.default_gpu}")  # 可以用backbone!
-        clip_model = backbone
+        # kwargs
+        self.kwargs = kwargs
+
+        # device
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # model
+        clip_model = backbone  # maybe
         clip_model.eval()
-        if kwargs["use_float32"]:
+        if self.kwargs["use_float32"]:
             clip_model.float()
-        self.clip_model = clip_model  # not equal to self.model, which is defined in init_model
-        self.use_grad_checkpoint = kwargs["use_grad_checkpoint"]
+        self.clip_model = clip_model  # not equal to self.model, which is defined in self.init_model()
         ctx_dim = self.clip_model.ln_final.weight.shape[0]
 
-        self.train_batch = kwargs["train_batch"]
-        self.lr = kwargs["lr"] * self.train_batch / 20
-        self.wd = kwargs["wd"]
-        self.epochs = kwargs["epochs"]
+        self.kwargs["lr"] = kwargs["lr"] * self.kwargs["train_batch_size"] / 20
         self.current_class_names = []
+
         decoder_layer = torch.nn.TransformerDecoderLayer(d_model=ctx_dim, nhead=1, activation='gelu',
-                                                         batch_first=True).cuda(device=self.default_gpu).type(
+                                                         batch_first=True).cuda(device=self.kwargs["default_gpu"]).type(
             self.clip_model.dtype)
         self.vga = torch.nn.TransformerDecoder(decoder_layer, 1) if kwargs["use_vga"] else None
 
         self.get_variational_adapters(ctx_dim)
         self.vga_global = None
-        if self.args.hierarchical:
+        if self.kwargs["hierarchical"]:
             self.get_variational_adapters(ctx_dim, global_adapter=True)
 
         self.init_task_tokens(ctx_dim)
@@ -600,26 +611,37 @@ class CLAP4CLIP(Finetune):
         self.previous_vga = None
 
         # directories
-        if not os.path.isdir(args.ckpt_path):
-            mkdir_p(args.checkpoint)
-        if not os.path.isdir(args.save_path):
-            mkdir_p(args.save_path)
-        np.save(args.checkpoint + "/seed.npy", args.seed)
+        def mkdir_p(path):  # todo: this func should not be placed here, and should be written in utils files...
+            '''make dir if not exist'''
+            try:
+                os.makedirs(path)
+            except OSError as exc:  # Python >2.5
+                if exc.errno == errno.EEXIST and os.path.isdir(path):
+                    pass
+                else:
+                    raise
+
+        if not os.path.isdir(self.kwargs["ckpt_path"]):
+            mkdir_p(self.kwargs["checkpoint"])
+        if not os.path.isdir(self.kwargs["save_path"]):
+            mkdir_p(self.kwargs["save_path"])
+        np.save(self.kwargs["checkpoint"] + "/seed.npy", self.kwargs["seed"])
         
     def observe(self, data):
         # todo: inherit all the logic from Finetune, or overwrite?
+        # todo: 接口对齐
         x, y = data['image'], data['label']
         x = x.to(self.device)
         y = y.to(self.device)
-        output, (kl_loss, prior_matching_loss, _) = self.model(x.cuda(device=self.default_gpu), y)
-        if self.variational:  # where defined?
+        output, (kl_loss, prior_matching_loss, _) = self.model(x.cuda(device=self.kwargs["default_gpu"]), y)  # todo: check correct or not
+        if self.kwargs["variational"]:
             targets = y.unsqueeze(0).expand(output.shape[0], -1).contiguous().view(-1)
             output = output.view(-1, output.shape[-1])
         else:
             targets = y
 
         loss = F.cross_entropy(output, targets) + kl_loss + prior_matching_loss
-        pred = torch.argmax(output, dim=1)  # !!!
+        pred = torch.argmax(output, dim=1)  # ok? or -1? or 0?
         acc = torch.sum(pred == y).item()  # dim ok???
         return pred, acc / x.size(0), loss
 
@@ -629,25 +651,20 @@ class CLAP4CLIP(Finetune):
         x = x.to(self.device)
         y = y.to(self.device)
 
-        logits, _ = self.model(x.cuda(device=self.default_gpu), y, test=True, return_mean=False)
+        logits, _ = self.model(x.cuda(device=self.kwargs["default_gpu"]), y, test=True, return_mean=False)
         pred = torch.argmax(logits, dim=1)  # !!!
         acc = torch.sum(pred == y).item()
         return pred, acc / x.size(0)
 
-    def forward(self, x):
-        # todo: inherit all the logic from Finetune, or overwrite?
-        logits, _ = self.model(x)
-        pred = torch.argmax(logits, dim=1)  # !!!
-        return pred
-
     def before_task(self, task_idx, buffer, train_loader, test_loaders):
-        self.task_to_cls_num[task_idx] = len(train_loader.dataset.class_names)  # todo: why dataset has this attr
+        # todo: check ok?
+        self.task_to_cls_num[task_idx] = len(train_loader.dataset.class_names)  # todo: why dataset has this attr--class_names
         self.current_class_names += train_loader.dataset.class_names
-        self.prompt_templates = train_loader.dataset.prompt_templates
+        self.prompt_templates = train_loader.dataset.prompt_templates  # todo: 复杂。需要自己搓。不属于kwargs
 
-        if len(train_loader.dataset)< self.train_batch:
+        if len(train_loader.dataset)< self.kwargs["train_batch_size"]:
             real_img_bsz = len(train_loader.dataset)  
-            self.lr = self.lr * real_img_bsz / self.train_batch 
+            self.kwargs["lr"] = self.kwargs["lr"] * real_img_bsz / self.kwargs["train_batch_size"]
             
         per_epoch_steps = len(train_loader)
 
@@ -656,6 +673,7 @@ class CLAP4CLIP(Finetune):
         if self.model.vga is not None:
             self.model.vga.train()
             
+        # todo: memory
         if task_idx > 0:
             with open(self.save_path + "/memory_"+str(task_idx)+".pickle", "rb") as f:
                 buf = pickle.load(f)
@@ -663,6 +681,7 @@ class CLAP4CLIP(Finetune):
                 buffer.labels = list(buf["labels"])
 
     def after_task(self, task_idx, buffer, train_loader, test_loaders):
+        # check ok?
         self.model.eval()
         self.model.set_classifier()
 
@@ -671,7 +690,7 @@ class CLAP4CLIP(Finetune):
         #     self.compute_adapter_distances()
         
         if task_idx > 0:
-            trsf = [
+            trsf = [  # todo: maybe no need
                 transforms.Resize(224, interpolation=BICUBIC),
                 transforms.CenterCrop(224),
                 lambda image: image.convert("RGB"),
@@ -679,11 +698,11 @@ class CLAP4CLIP(Finetune):
                 transforms.ToTensor(),
                 transforms.Normalize((0.48145466, 0.4578275, 0.40821073),(0.26862954,0.26130258, 0.27577711)),
             ]
-            buffer.update(self.model, train_loader, trsf, task_idx, self.total_cls_num, cur_cls_indexes, self.device)
-            buffer.reduce_old_data(task_idx, self.total_cls_num)
-            with open(self.save_path + "/memory_"+str(task_idx)+".pickle", "wb") as f:
+            buffer.update(self.model, train_loader, trsf, task_idx, self.kwargs["total_cls_num"], cur_cls_indexes, self.device)  # ???
+            buffer.reduce_old_data(task_idx, self.kwargs["total_cls_num"])
+            with open(self.kwargs["save_path"] + "/memory_"+str(task_idx)+".pickle", "wb") as f:
                 pickle.dump({"images": buffer.images, "labels": buffer.lables}, f)
-            if self.finetune and buffer is not None:
+            if self.kwargs["finetune"] and buffer is not None:
                 def seed_worker(worker_id):
                     worker_seed = torch.initial_seed() % 2 ** 32
                     np.random.seed(worker_seed)
@@ -698,41 +717,41 @@ class CLAP4CLIP(Finetune):
 
         self.model.eval()
         self.model.set_classifier() 
-        if self.distill:
+        if self.kwargs["distill"]:
             self.preserve_copy_for_distillation()
 
     def get_parameters(self, config):
         # todo: see logic in paper
         return filter(lambda p: p.requires_grad, self.model.parameters())
     
-    def init_model(self, class_names, per_epoch_steps, prompt_templates=None):        
-        if self.args.sess > 0:
+    def init_model(self, class_names, per_epoch_steps, prompt_templates=None):
+        # todo: 逻辑要改。要接收cur_task_idx
+        if cur_task_idx > 0:  # current task idx.
             freeze_parameters(self.vga, requires_grad=True)
-            if self.args.expandable_tokens:
+            if self.kwargs["expandable_tokens"]:
                 self.expand_task_token_list()
-            if self.args.expandable_adapter:
+            if self.kwargs["expandable_adapter"]:
                 self.expand_adapter()
-            if self.args.expandable_prompt:
+            if self.kwargs["expandable_prompt"]:
                 self.expand_prompts()
 
-        self.n_class = len(class_names)
         clip_model = deepcopy(self.clip_model)
 
         prev_model_components = (
                                  self.previous_mu_adapters, self.previous_sigma_adapters, 
                                  self.previous_task_tokens, self.previous_vga, 
                                  self.previous_mu_global_adapter, self.previous_sigma_global_adapter )
-        self.model = CLIP(self.args, class_names, clip_model, self.vga,  
+        self.model = CLIP(self.kwargs, class_names, clip_model, self.vga,
                           mu_adapters=self.mu_adapters, sigma_adapters=self.sigma_adapters,
                           task_tokens=self.task_tokens, task_to_cls_num = self.task_to_cls_num,
                           prompt_templates=prompt_templates, previous_components=prev_model_components,
                           task_to_distribution=self.task_to_distribution,
-                          mu_global_adapter=self.mu_global_adapter if self.args.hierarchical else None, 
-                          sigma_global_adapter=self.sigma_global_adapter if self.args.hierarchical else None,
+                          mu_global_adapter=self.mu_global_adapter if self.kwargs["hierarchical"] else None,
+                          sigma_global_adapter=self.sigma_global_adapter if self.kwargs["hierarchical"] else None,
                            global_vga=self.vga_global
                           )  # diy CLIP
         self.model.eval()
-        if self.use_grad_checkpoint:
+        if self.kwargs["use_grad_checkpoint"]:
             try:
                 self.model.text_encoder.transformer.use_gradient_checkpoint = True 
             except:
@@ -745,30 +764,30 @@ class CLAP4CLIP(Finetune):
         self.unfreeze_for_finetuning()
         self.cur_iter_idx = 0
         memory_loader = data['memory_loader']
-        if len(memory_loader.dataset)< self.train_batch:
+        if len(memory_loader.dataset)< self.kwargs["train_batch_size"]:
             real_img_bsz = len(memory_loader.dataset)
-            self.lr = self.lr * real_img_bsz / self.train_batch 
+            self.lr = self.lr * real_img_bsz / self.kwargs["train_batch_size"] 
         else:
-            real_img_bsz = self.train_batch
+            real_img_bsz = self.kwargs["train_batch_size"]
             
         per_epoch_steps=len(memory_loader)
         inter_adapter_distances = []
         self.build_optimizer(per_epoch_steps=per_epoch_steps, lr=self.lr/10., warmup=False, finetune=True)
         if self.model.vga is not None:
             self.model.vga.eval()
-        for epoch in tqdm(range(self.args.finetune_epochs)):
+        for epoch in tqdm(range(self.kwargs["finetune_epochs"]):
             for idx, (x, y, index) in tqdm(enumerate(memory_loader), total=len(memory_loader), desc = 'Finetuning'):
 
                 cur_iter_idx = epoch*per_epoch_steps+idx
                 self.cur_iter_idx = cur_iter_idx
                 self.scheduler.step(cur_iter_idx)
 
-                output, (kl_loss, prior_matching_loss, inter_adapter_distance) = self.model(x.cuda(device=self.args.default_gpu), y, finetuning=True)
+                output, (kl_loss, prior_matching_loss, inter_adapter_distance) = self.model(x.cuda(device=self.kwargs["default_gpu"]), y, finetuning=True)
                 # pdb.set_trace()
-                y = y.cuda(device=self.args.default_gpu)
+                y = y.cuda(device=self.kwargs["default_gpu"])
                 # pdb.set_trace()
                 loss = 0.
-                if self.args.variational:
+                if self.kwargs.variational:
                     targets = y.unsqueeze(0).expand(output.shape[0], -1).contiguous().view(-1)
                     output = output.view(-1, output.shape[-1])
                 else:
@@ -780,13 +799,13 @@ class CLAP4CLIP(Finetune):
 
                 if inter_adapter_distance is not None and (epoch == self.epochs-1):
                         inter_adapter_distances.append(inter_adapter_distance)
-        if self.args.sess == 9 and self.args.get_interclass_dist:
+        if self.kwargs.sess == 9 and self.kwargs.get_interclass_dist:
             with torch.no_grad():
                 self.compute_class_centroids()
         if len(inter_adapter_distances):
                 print(f"Average inter-adapter distance: {np.mean(inter_adapter_distance)}")
 
-        if self.args.sess > 0 and self.args.expandable_tokens:
+        if self.kwargs.sess > 0 and self.kwargs.expandable_tokens:
             self.epoch_log()
     
     @torch.no_grad()
@@ -796,7 +815,7 @@ class CLAP4CLIP(Finetune):
         self.previous_sigma_adapters = deepcopy(self.model.sigma_adapters)
         self.previous_task_tokens = deepcopy(self.model.task_tokens)
         self.previous_vga = deepcopy(self.model.vga)
-        if self.args.hierarchical:
+        if self.kwargs["hierarchical"]:
             self.previous_mu_global_adapter = deepcopy(self.model.mu_global_adapter)
             self.previous_sigma_global_adapter = deepcopy(self.model.sigma_global_adapter)
             freeze_parameters(self.previous_mu_global_adapter, requires_grad=False)
@@ -805,3 +824,13 @@ class CLAP4CLIP(Finetune):
         freeze_parameters(self.previous_sigma_adapters, requires_grad=False)
         freeze_parameters(self.previous_task_tokens, requires_grad=False)
         freeze_parameters(self.previous_vga, requires_grad=False)
+        
+        
+    def get_variational_adapters(self, ctx_dim, global_adapter=False):
+        if not global_adapter:
+            self.mu_adapters = nn.ModuleList([Adapter(ctx_dim, ctx_dim).cuda(device=self.kwargs["default_gpu"]).type(self.clip_model.dtype)])
+            self.sigma_adapters = nn.ModuleList([Adapter(ctx_dim, ctx_dim, sigma=True).cuda(device=self.kwargs["default_gpu"]).type(self.clip_model.dtype)])
+            self.mu_adapter_deter = None
+        else:
+            self.mu_global_adapter = Adapter(ctx_dim, ctx_dim).cuda(device=self.kwargs["default_gpu"]).type(self.clip_model.dtype)
+            self.sigma_global_adapter = Adapter(ctx_dim, ctx_dim, sigma=True).cuda(device=self.kwargs["default_gpu"]).type(self.clip_model.dtype)

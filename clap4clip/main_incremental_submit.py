@@ -209,7 +209,7 @@ def main(args):
                 memory = pickle.load(open(args.save_path + "/memory_"+str(args.sess)+".pickle", 'rb'))
         task_info, train_loader, class_name, test_class, test_loader, for_memory, ood_test_loader = inc_dataset.new_task(memory) 
         
-        args.sess=ses   
+        args.sess=ses   # how to
       
         if(start_sess==ses and start_sess!=0): 
             inc_dataset._current_task = ses
@@ -236,6 +236,7 @@ def main(args):
             if args.finetuning:
                 memory_loader = inc_dataset.get_memory_loader(memory)
                 data['memory_loader'] = memory_loader
+                print("load memory loader: ", type(data['memory_loader']))
         if ses > 0 and args.finetuning:
             model.finetuning(data)
 
