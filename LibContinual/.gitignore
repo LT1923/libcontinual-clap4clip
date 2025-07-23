@@ -4,3 +4,5 @@
 __pycache__
 .venv-3.8/
 
+# Automatically downloaded, do not need to upload
+ckpt/ 
