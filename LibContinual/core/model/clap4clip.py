@@ -100,8 +100,9 @@ class CLIP(nn.Module):
                  mu_adapters=None, sigma_adapters=None, task_tokens=None,
                  task_to_cls_num=None, prompt_templates=None, previous_components=None,
                  task_to_distribution=None, mu_global_adapter=None, sigma_global_adapter=None,
-                 global_vga=None):
+                 global_vga=None, cur_task_idx = None):
         super().__init__()
+        self.cur_task_idx = cur_task_idx
         self.n_class = len(class_names)
         # self.args = args
         # text encoder
@@ -658,6 +659,7 @@ class CLAP4CLIP(Finetune):
 
     def before_task(self, task_idx, buffer, train_loader, test_loaders):
         # todo: check ok?
+        self.cur_task_idx = task_idx
         self.task_to_cls_num[task_idx] = len(train_loader.dataset.class_names)  # todo: why dataset has this attr--class_names
         self.current_class_names += train_loader.dataset.class_names
         self.prompt_templates = train_loader.dataset.prompt_templates  # todo: 复杂。需要自己搓。不属于kwargs
@@ -722,11 +724,11 @@ class CLAP4CLIP(Finetune):
 
     def get_parameters(self, config):
         # todo: see logic in paper
-        return filter(lambda p: p.requires_grad, self.model.parameters())
-    
+        # return filter(lambda p: p.requires_grad, self.model.parameters())
+        return filter(lambda p: p.requires_grad, self.clip_model.parameters())
+
     def init_model(self, class_names, per_epoch_steps, prompt_templates=None):
-        # todo: 逻辑要改。要接收cur_task_idx
-        if cur_task_idx > 0:  # current task idx.
+        if self.cur_task_idx > 0:  # current task idx.
             freeze_parameters(self.vga, requires_grad=True)
             if self.kwargs["expandable_tokens"]:
                 self.expand_task_token_list()
@@ -748,7 +750,7 @@ class CLAP4CLIP(Finetune):
                           task_to_distribution=self.task_to_distribution,
                           mu_global_adapter=self.mu_global_adapter if self.kwargs["hierarchical"] else None,
                           sigma_global_adapter=self.sigma_global_adapter if self.kwargs["hierarchical"] else None,
-                           global_vga=self.vga_global
+                           global_vga=self.vga_global, cur_task_idx = self.cur_task_idx
                           )  # diy CLIP
         self.model.eval()
         if self.kwargs["use_grad_checkpoint"]:
@@ -775,7 +777,7 @@ class CLAP4CLIP(Finetune):
         self.build_optimizer(per_epoch_steps=per_epoch_steps, lr=self.lr/10., warmup=False, finetune=True)
         if self.model.vga is not None:
             self.model.vga.eval()
-        for epoch in tqdm(range(self.kwargs["finetune_epochs"]):
+        for epoch in tqdm(range(self.kwargs["finetune_epochs"])):
             for idx, (x, y, index) in tqdm(enumerate(memory_loader), total=len(memory_loader), desc = 'Finetuning'):
 
                 cur_iter_idx = epoch*per_epoch_steps+idx
@@ -834,3 +836,8 @@ class CLAP4CLIP(Finetune):
         else:
             self.mu_global_adapter = Adapter(ctx_dim, ctx_dim).cuda(device=self.kwargs["default_gpu"]).type(self.clip_model.dtype)
             self.sigma_global_adapter = Adapter(ctx_dim, ctx_dim, sigma=True).cuda(device=self.kwargs["default_gpu"]).type(self.clip_model.dtype)
+
+    def init_task_tokens(self, ctx_dim):
+        task_token = torch.zeros((1, 1,  ctx_dim), dtype=self.clip_model.dtype, requires_grad=True).cuda(device=self.kwargs["default_gpu"])
+        nn.init.normal_(task_token, std=.02)
+        self.task_tokens =  nn.ParameterList([nn.Parameter(task_token)]) if self.kwargs["expandable_tokens"] else None

@@ -277,7 +277,6 @@ class Trainer(object):
             model.model.classes_names = self.train_loader.cls_map
 
         for task_idx in range(self.task_num):
-            torch.cuda.empty_cache()  # add for cuda limitation
             self.task_idx = task_idx
             if self.rank == 0:
                 print(f"================Task {task_idx} Start!================")
@@ -557,7 +556,13 @@ class Trainer(object):
         meter.reset()
 
         total = len(dataloader)
-        init_seed(self.config['seed'] + epoch_idx, self.config['deterministic']) # Ensure Reproducibility
+        if self.config["classifier"]["name"] in ["CLAP4CLIP"]:
+            init_seed(self.config["seed"], self.config["deterministic"])
+        else:
+            # todo: fix seed, not vary with task_idx
+            init_seed(self.config['seed'] + epoch_idx, self.config['deterministic']) # Ensure Reproducibility
+
+
         for b, batch in tqdm(enumerate(dataloader), total=total, disable=(self.rank != 0)):
 
             batch['batch_id'] = b
