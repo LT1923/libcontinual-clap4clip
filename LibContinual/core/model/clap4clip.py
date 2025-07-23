@@ -353,7 +353,7 @@ class CLIP(nn.Module):
             print(f"警告：任务 {self.cur_task_idx} 不在映射中，使用默认值 0")
 
         n_class = self.n_class
-        prev_cls_num = self.n_class - self.task_to_cls_num[self.cur_task_idx]  # todo: self.cur_task_idx, should be maintained while training, not realize yet
+        prev_cls_num = self.n_class - self.task_to_cls_num[self.cur_task_idx]  # DONE: self.cur_task_idx, should be maintained while training, not realize yet
         logit_scale = self.logit_scale.exp()
         if test:
             with torch.no_grad():
@@ -616,7 +616,8 @@ class CLAP4CLIP(Finetune):
         self.kwargs = kwargs
         
         # Optimization parameters
-        self.lr = kwargs.get('lr', 0.001)# fixed: 这是参数里的默认学习率
+        # fixed: 这是参数里的默认学习率
+        self.lr = kwargs.get('lr', 0.001)*kwargs.get('train_batch',32)/20
         self.wd = kwargs.get('wd', 0.0)# default value for weight decay
         self.epochs = kwargs.get('epochs', 5)  # default epochs
         self.train_batch = kwargs.get('train_batch',32)  # default train batch size

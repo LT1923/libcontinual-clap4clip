@@ -31,7 +31,7 @@ seed: 0
 
 # optimizer
 optimizer:
-  name: SGD  # todo
+  name: SGD  # DONE: torch.optim.SGD(param_dict, lr=lr, weight_decay=self.wd)
   kwargs:
     lr: 1e-3
     momentum: 0.9  # todo
