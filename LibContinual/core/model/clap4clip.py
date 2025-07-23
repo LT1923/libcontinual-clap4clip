@@ -37,6 +37,8 @@ try:
 except ImportError:
     from PIL import Image
     BICUBIC = Image.BICUBIC
+    
+from ..utils.clap4clip_utils import build_cosine_scheduler, freeze_parameters
 
 class BufferDataset(Dataset):
     def __init__(self, images, labels, transform=None):
@@ -97,13 +99,14 @@ class TextEncoder(nn.Module):
 
 
 class CLIP(nn.Module):
-    def __init__(self, args, class_names, clip_model, vga,
+    def __init__(self, kwargs, class_names, clip_model, vga,
                  mu_adapters=None, sigma_adapters=None, task_tokens=None,
                  task_to_cls_num=None, prompt_templates=None, previous_components=None,
                  task_to_distribution=None, mu_global_adapter=None, sigma_global_adapter=None,
                  global_vga=None):
         super().__init__()
         self.n_class = len(class_names)
+        self.kwargs = kwargs
         # self.args = args
         # text encoder
         self.text_encoder = TextEncoder(clip_model)
@@ -575,6 +578,13 @@ class CLAP4CLIP(Finetune):
         super().__init__(backbone, feat_dim, num_class, **kwargs)
         # kwargs
         self.kwargs = kwargs
+        
+        # Optimization parameters
+        self.lr = kwargs.get('lr', 0.001)# fixed: 这是参数里的默认学习率
+        self.wd = kwargs.get('wd', 0.0)# default value for weight decay
+        self.epochs = kwargs.get('epochs', 5)  # default epochs
+        self.train_batch = kwargs.get('train_batch',32)  # default train batch size
+        self.test_batch = kwargs.get('test_batch', 32)  # default test batch size
 
         # device
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -610,6 +620,9 @@ class CLAP4CLIP(Finetune):
         self.previous_sigma_adapters, self.previous_sigma_global_adapter = None, None
         self.previous_task_tokens = None
         self.previous_vga = None
+        
+        # fixed: task 索引的初始化
+        self.cur_task_idx = 0
 
         # directories
         def mkdir_p(path):  # todo: this func should not be placed here, and should be written in utils files...
@@ -664,10 +677,13 @@ class CLAP4CLIP(Finetune):
         return pred, acc / x.size(0)
 
     def before_task(self, task_idx, buffer, train_loader, test_loaders):
-        # todo: check ok? not OK TwT
+        # todo: check ok? 
         self.task_to_cls_num[task_idx] = len(train_loader.dataset.get_class_names())  # todo: why dataset has this attr--class_names
         self.current_class_names += train_loader.dataset.get_class_names()# fixed : dataset has no attribute named 'class_names'
-        self.prompt_templates = train_loader.dataset.prompt_templates  # todo: 复杂。需要自己搓。不属于kwargs
+        # self.prompt_templates = train_loader.dataset.prompt_templates  # todo: 复杂。需要自己搓。不属于kwargs
+        self.prompt_templates = ["a photo of a {}."] # fixed: 相当于 cifar100 的 sigle templates, 还有 ensemble 方法没有实现
+        # TODO: 如何利用 clap4clip 对 cifar100 自定义的类别顺序？
+        self.cur_task_idx = task_idx
 
         if len(train_loader.dataset)< self.kwargs["train_batch_size"]:
             real_img_bsz = len(train_loader.dataset)  
@@ -675,8 +691,8 @@ class CLAP4CLIP(Finetune):
             
         per_epoch_steps = len(train_loader)
 
-        self.init_model(class_names=self.current_class_names, per_epoch_steps=per_epoch_steps, prompt_templates=self.prompt_templates)
-        
+        self.init_model(class_names=self.current_class_names, cur_task_idx=self.cur_task_idx, per_epoch_steps=per_epoch_steps, prompt_templates=self.prompt_templates)
+
         if self.model.vga is not None:
             self.model.vga.train()
             
@@ -744,8 +760,8 @@ class CLAP4CLIP(Finetune):
         
         return train_parameters
     
-    def init_model(self, class_names, per_epoch_steps, prompt_templates=None):
-        # todo: 逻辑要改。要接收cur_task_idx
+    def init_model(self, class_names, cur_task_idx, per_epoch_steps, prompt_templates=None):
+        # DONE: 逻辑要改? 要接收cur_task_idx 
         if cur_task_idx > 0:  # current task idx.
             freeze_parameters(self.vga, requires_grad=True)
             if self.kwargs["expandable_tokens"]:
@@ -761,7 +777,7 @@ class CLAP4CLIP(Finetune):
                                  self.previous_mu_adapters, self.previous_sigma_adapters, 
                                  self.previous_task_tokens, self.previous_vga, 
                                  self.previous_mu_global_adapter, self.previous_sigma_global_adapter )
-        self.model = CLIP(self.kwargs, class_names, clip_model, self.vga,
+        self.model = CLIP(kwargs=self.kwargs, class_names=class_names, clip_model=clip_model, vga=self.vga,
                           mu_adapters=self.mu_adapters, sigma_adapters=self.sigma_adapters,
                           task_tokens=self.task_tokens, task_to_cls_num = self.task_to_cls_num,
                           prompt_templates=prompt_templates, previous_components=prev_model_components,
@@ -827,6 +843,34 @@ class CLAP4CLIP(Finetune):
 
         if self.kwargs.sess > 0 and self.kwargs.expandable_tokens:
             self.epoch_log()
+    
+    # fixed: 没有这个方法跑不起来，但是可以照搬吗？        
+    def build_optimizer(self, per_epoch_steps, lr, warmup=False, finetune=False):
+        for name, param in self.model.named_parameters():
+            if "vga" not in name and "task_token" not in name and "adapter" not in name:
+                param.requires_grad_(False)
+            
+        # double check
+        enabled = set()
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                enabled.add(name)
+
+        print(f"\nParameters to be updated: {sorted(enabled)}\n")
+
+        param_dict = [{'params': [p for p in self.model.parameters() if p.requires_grad]}]
+
+        self.optimizer = torch.optim.SGD(param_dict, lr=lr, weight_decay=self.wd)
+        total_step=self.epochs*per_epoch_steps if not finetune else self.args.finetune_epochs*per_epoch_steps
+        warmup_steps = int(0.3 * total_step) if warmup else 0
+        self.scheduler = build_cosine_scheduler(
+            self.optimizer,
+            lr=lr,
+            total_step=total_step,
+            lr_warmup_step=warmup_steps
+            )
+        
+
     
     @torch.no_grad()
     def preserve_copy_for_distillation(self):
