@@ -252,3 +252,7 @@ def cosine_loss(q,k):
     k = k/k_norm
     cos = ((q*k)/(k.shape[0]*k.shape[1])).sum()
     return 1-cos
+
+
+# copied from clap4clip/classifier/evaluator.py
+

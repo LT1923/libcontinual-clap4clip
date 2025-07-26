@@ -38,7 +38,7 @@ except ImportError:
     from PIL import Image
     BICUBIC = Image.BICUBIC
     
-from ..utils.clap4clip_utils import build_cosine_scheduler, freeze_parameters
+from ..utils.clap4clip_utils import build_cosine_scheduler, freeze_parameters, init_weights
 
 class BufferDataset(Dataset):
     def __init__(self, images, labels, transform=None):
@@ -67,25 +67,112 @@ def freeze_parameters(m, requires_grad=False):
 class Adapter(nn.Module):
     def __init__(self, in_dim, out_dim, sigma=False, layer_num=1):
         super().__init__()
-
+        
         self.fc = nn.Sequential(nn.Linear(in_dim, out_dim))
         self.sigma = sigma
-        # init_weights(self.fc)
         
-        print("sigma:",self.sigma,self.fc.parameters)
+        # 强制初始化
+        self._force_init_weights()
+        
+        print(f"Adapter created - sigma: {self.sigma}")
+        self._debug_weights()
+        
+    def _force_init_weights(self):
+        """强制重新初始化权重"""
+        with torch.no_grad():
+            if self.sigma:
+                # Sigma适配器：使用非常小的权重
+                self.fc[0].weight.fill_(0.001)  # 几乎为0的权重
+                self.fc[0].bias.fill_(-3.0)     # 较大的负偏置
+                print("Sigma adapter: 强制初始化为小权重")
+            else:
+                # Mu适配器：标准小权重初始化
+                nn.init.xavier_uniform_(self.fc[0].weight, gain=0.01)
+                nn.init.zeros_(self.fc[0].bias)
+                print("Mu adapter: 标准初始化")
+    
+    def _debug_weights(self):
+        """调试权重信息"""
+        weight = self.fc[0].weight
+        bias = self.fc[0].bias
+        print(f"  权重形状: {weight.shape}")
+        print(f"  权重范围: {weight.min().item():.6f} to {weight.max().item():.6f}")
+        print(f"  偏置范围: {bias.min().item():.6f} to {bias.max().item():.6f}")
+        print(f"  权重是否包含NaN: {torch.isnan(weight).any()}")
+        print(f"  偏置是否包含NaN: {torch.isnan(bias).any()}")
 
     def forward(self, x):
-        print("x:",x)
+        print(f"\n=== Adapter Forward (sigma={self.sigma}) ===")
+        print(f"输入x形状: {x.shape}")
+        print(f"输入x范围: {x.min().item():.4f} to {x.max().item():.4f}")
+        print(f"输入x是否包含NaN: {torch.isnan(x).any()}")
+        print(f"输入x是否包含Inf: {torch.isinf(x).any()}")
+        
+        # 检查权重状态
+        weight = self.fc[0].weight
+        bias = self.fc[0].bias
+        
+        print(f"当前权重范围: {weight.min().item():.6f} to {weight.max().item():.6f}")
+        print(f"当前偏置范围: {bias.min().item():.6f} to {bias.max().item():.6f}")
+        print(f"权重包含NaN: {torch.isnan(weight).any()}")
+        print(f"偏置包含NaN: {torch.isnan(bias).any()}")
+        
+        # 如果权重已经是NaN，强制重新初始化
+        if torch.isnan(weight).any() or torch.isnan(bias).any():
+            print("检测到权重NaN，强制重新初始化")
+            self._force_init_weights()
+        
+        # 如果输入有问题，清理输入
+        if torch.isnan(x).any() or torch.isinf(x).any():
+            print("输入包含NaN/Inf，进行清理")
+            x = torch.nan_to_num(x, nan=0.0, posinf=1.0, neginf=-1.0)
+            print(f"清理后输入范围: {x.min().item():.4f} to {x.max().item():.4f}")
+        
+        # 计算线性变换
+        try:
+            fc_output = self.fc(x)
+            print(f"线性层输出范围: {fc_output.min().item():.4f} to {fc_output.max().item():.4f}")
+            print(f"线性层输出包含NaN: {torch.isnan(fc_output).any()}")
+        except Exception as e:
+            print(f"线性层计算出错: {e}")
+            # 创建安全的输出
+            fc_output = torch.zeros_like(x) if not self.sigma else torch.full_like(x, -2.0)
+        
+        # 检查线性层输出
+        if torch.isnan(fc_output).any() or torch.isinf(fc_output).any():
+            print("线性层输出包含NaN/Inf，使用安全默认值")
+            if self.sigma:
+                fc_output = torch.full_like(x, -2.0)  # 对sigma使用负值
+            else:
+                fc_output = torch.zeros_like(x)       # 对mu使用零值
+            print(f"安全默认值范围: {fc_output.min().item():.4f} to {fc_output.max().item():.4f}")
+        
         if self.sigma:
-            print("sigma")
-            print("fc:", self.fc(x))
-            print("softplus:",F.softplus(self.fc(x)))
-            return F.softplus(self.fc(x)) * 0.999 + 0.001
+            print("应用sigma变换...")
+            # 限制范围，防止softplus溢出
+            fc_output_clamped = torch.clamp(fc_output, min=-10.0, max=5.0)
+            print(f"限制后范围: {fc_output_clamped.min().item():.4f} to {fc_output_clamped.max().item():.4f}")
+            
+            try:
+                softplus_output = F.softplus(fc_output_clamped)
+                print(f"softplus输出范围: {softplus_output.min().item():.4f} to {softplus_output.max().item():.4f}")
+                print(f"softplus输出包含NaN: {torch.isnan(softplus_output).any()}")
+                
+                if torch.isnan(softplus_output).any():
+                    print("softplus产生NaN，使用备用方案")
+                    result = torch.full_like(softplus_output, 0.1)
+                else:
+                    result = softplus_output * 0.999 + 0.001
+                    
+            except Exception as e:
+                print(f"softplus计算出错: {e}")
+                result = torch.full_like(fc_output_clamped, 0.1)
+            
+            print(f"最终sigma输出范围: {result.min().item():.4f} to {result.max().item():.4f}")
+            return result
         else:
-            print("no sigma")
-            print(self.fc(x))
-            return self.fc(x)
-
+            print(f"最终mu输出范围: {fc_output.min().item():.4f} to {fc_output.max().item():.4f}")
+            return fc_output
 
 class TextEncoder(nn.Module):
     def __init__(self, clip_model):
@@ -325,7 +412,7 @@ class CLIP(nn.Module):
         print(f"输入图像数据类型: {image.dtype}")
         print(f"输入图像设备: {image.device}")
         
-        # 确保输入格式正确
+        # HACK: 确保输入格式正确
         if len(image.shape) == 3:
             image = image.unsqueeze(0)
             print(f"添加批次维度后: {image.shape}")
@@ -696,9 +783,7 @@ class CLAP4CLIP(Finetune):
 
     def observe(self, data):
         # todo: inherit all the logic from Finetune, or overwrite?
-        # todo: 接口对齐
-        
-        
+        # DONE: 接口对齐
         # 确保任务索引同步
         if hasattr(self, 'model') and self.model is not None:
             if self.model.cur_task_idx != self.cur_task_idx:
@@ -716,8 +801,11 @@ class CLAP4CLIP(Finetune):
             targets = y
 
         loss = F.cross_entropy(output, targets) + kl_loss + prior_matching_loss
-        pred = torch.argmax(output, dim=1)  # ok? or -1? or 0?
-        acc = torch.sum(pred == y).item()  # dim ok???
+        # print("output shape:", output.shape)
+        pred = torch.argmax(output, dim=1)  # DONE: ok! or -1? or 0? output shape: torch.Size([640, 10])
+        # fixed: pred和y的维度不匹配！pred shape: torch.Size([640]), y shape: torch.Size([32]) 改用target: torch.Size([640])
+        acc = torch.sum(pred == targets).item()  # DONE: dim ok??? 
+        # todo: accuracy的计算方法不对。参考clap4clip/classifier/evaluator.py和clap4clip/utils/eval.py
         return pred, acc / x.size(0), loss
 
     def inference(self, data):
@@ -727,6 +815,7 @@ class CLAP4CLIP(Finetune):
         y = y.to(self.device)
 
         logits, _ = self.model(x.cuda(device=self.kwargs["default_gpu"]), y, test=True, return_mean=False)
+        # todo: 从logits到accuracy的计算方法不对。参考clap4clip/classifier/evaluator.py和clap4clip/utils/eval.py
         pred = torch.argmax(logits, dim=1)  # !!!
         acc = torch.sum(pred == y).item()
         return pred, acc / x.size(0)
