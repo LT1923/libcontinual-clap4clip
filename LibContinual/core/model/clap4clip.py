@@ -95,27 +95,27 @@ class Adapter(nn.Module):
         """调试权重信息"""
         weight = self.fc[0].weight
         bias = self.fc[0].bias
-        print(f"  权重形状: {weight.shape}")
-        print(f"  权重范围: {weight.min().item():.6f} to {weight.max().item():.6f}")
-        print(f"  偏置范围: {bias.min().item():.6f} to {bias.max().item():.6f}")
-        print(f"  权重是否包含NaN: {torch.isnan(weight).any()}")
-        print(f"  偏置是否包含NaN: {torch.isnan(bias).any()}")
+        # print(f"  权重形状: {weight.shape}")
+        # print(f"  权重范围: {weight.min().item():.6f} to {weight.max().item():.6f}")
+        # print(f"  偏置范围: {bias.min().item():.6f} to {bias.max().item():.6f}")
+        # print(f"  权重是否包含NaN: {torch.isnan(weight).any()}")
+        # print(f"  偏置是否包含NaN: {torch.isnan(bias).any()}")
 
     def forward(self, x):
         print(f"\n=== Adapter Forward (sigma={self.sigma}) ===")
-        print(f"输入x形状: {x.shape}")
-        print(f"输入x范围: {x.min().item():.4f} to {x.max().item():.4f}")
-        print(f"输入x是否包含NaN: {torch.isnan(x).any()}")
-        print(f"输入x是否包含Inf: {torch.isinf(x).any()}")
+        # print(f"输入x形状: {x.shape}")
+        # print(f"输入x范围: {x.min().item():.4f} to {x.max().item():.4f}")
+        # print(f"输入x是否包含NaN: {torch.isnan(x).any()}")
+        # print(f"输入x是否包含Inf: {torch.isinf(x).any()}")
         
         # 检查权重状态
         weight = self.fc[0].weight
         bias = self.fc[0].bias
         
-        print(f"当前权重范围: {weight.min().item():.6f} to {weight.max().item():.6f}")
-        print(f"当前偏置范围: {bias.min().item():.6f} to {bias.max().item():.6f}")
-        print(f"权重包含NaN: {torch.isnan(weight).any()}")
-        print(f"偏置包含NaN: {torch.isnan(bias).any()}")
+        # print(f"当前权重范围: {weight.min().item():.6f} to {weight.max().item():.6f}")
+        # print(f"当前偏置范围: {bias.min().item():.6f} to {bias.max().item():.6f}")
+        # print(f"权重包含NaN: {torch.isnan(weight).any()}")
+        # print(f"偏置包含NaN: {torch.isnan(bias).any()}")
         
         # 如果权重已经是NaN，强制重新初始化
         if torch.isnan(weight).any() or torch.isnan(bias).any():
@@ -759,6 +759,10 @@ class CLAP4CLIP(Finetune):
         self.cur_task_idx = 0
 
         # directories
+        self.save_path = kwargs["save_path"]
+        self.ckpt_path = self.kwargs["ckpt_path"] 
+        self.checkpoint = self.kwargs["checkpoint"]
+        
         def mkdir_p(path):  # todo: this func should not be placed here, and should be written in utils files...
             '''make dir if not exist'''
             try:
@@ -805,7 +809,7 @@ class CLAP4CLIP(Finetune):
         pred = torch.argmax(output, dim=1)  # DONE: ok! output shape: torch.Size([640, 10])
         # fixed: pred和y的维度不匹配！pred shape: torch.Size([640]), y shape: torch.Size([32]) 改用target: torch.Size([640])
         acc = torch.sum(pred == targets).item()  # DONE: dim ok??? 
-        print(f"Predictions: {pred}, Targets: {targets}, Accuracy: {acc / x.size(0)}, Loss: {loss.item()}")  # for debug
+        # print(f"Predictions: {pred}, Targets: {targets}, Accuracy: {acc / x.size(0)}, Loss: {loss.item()}")  # for debug
         # todo: accuracy的计算方法不对。参考clap4clip/classifier/evaluator.py和clap4clip/utils/eval.py
         return pred, acc / x.size(0), loss
 
@@ -852,7 +856,7 @@ class CLAP4CLIP(Finetune):
             
         # todo: memory
         if task_idx > 0:
-            with open(self.save_path + "/memory_"+str(task_idx)+".pickle", "rb") as f:
+            with open(self.save_path + "memory_"+str(task_idx)+".pickle", "rb") as f:
                 buf = pickle.load(f)
                 buffer.images = list(buf["images"])
                 buffer.labels = list(buf["labels"])
@@ -877,7 +881,7 @@ class CLAP4CLIP(Finetune):
             ]
             buffer.update(self.model, train_loader, trsf, task_idx, self.kwargs["total_cls_num"], cur_cls_indexes, self.device)  # ???
             buffer.reduce_old_data(task_idx, self.kwargs["total_cls_num"])
-            with open(self.kwargs["save_path"] + "/memory_"+str(task_idx)+".pickle", "wb") as f:
+            with open(self.kwargs["save_path"] + "memory_"+str(task_idx)+".pickle", "wb") as f:
                 pickle.dump({"images": buffer.images, "labels": buffer.lables}, f)
             if self.kwargs["finetune"] and buffer is not None:
                 def seed_worker(worker_id):
@@ -896,6 +900,35 @@ class CLAP4CLIP(Finetune):
         self.model.set_classifier() 
         if self.kwargs["distill"]:
             self.preserve_copy_for_distillation()
+            
+    def expand_adapter(self):
+        ctx_dim = self.clip_model.ln_final.weight.shape[0]
+        dtype = self.clip_model.dtype
+        new_mu = Adapter(ctx_dim, ctx_dim).cuda(device=self.kwargs["default_gpu"]).type(dtype)
+        new_sigma = Adapter(ctx_dim, ctx_dim, sigma=True).cuda(device=self.kwargs["default_gpu"]).type(dtype)
+        self.mu_adapters.append(new_mu)
+        self.sigma_adapters.append(new_sigma)
+        self.mu_adapters[:-1].eval()
+        self.sigma_adapters[:-1].eval()
+        freeze_parameters(self.mu_adapters[:-1], requires_grad=False)
+        freeze_parameters(self.sigma_adapters[:-1], requires_grad=False)
+        freeze_parameters(self.mu_adapters[-1], requires_grad=True)
+        freeze_parameters(self.sigma_adapters[-1], requires_grad=True)
+        
+    def expand_task_token_list(self):
+        new_task_token = deepcopy(self.task_tokens[-1])
+        nn.init.trunc_normal_(new_task_token, std=.02)
+        self.task_tokens.append(new_task_token)
+        freeze_parameters(self.task_tokens[:-1], requires_grad=False)
+        freeze_parameters(self.task_tokens[-1], requires_grad=True)
+        
+    def expand_prompts(self):
+        ctx_vectors = deepcopy(self.ctx[-1])
+        nn.init.normal_(ctx_vectors, std=0.02)
+        self.ctx.append(ctx_vectors)
+        freeze_parameters(self.ctx[:-1], requires_grad=False)
+        freeze_parameters(self.ctx[-1], requires_grad=True)
+
 
     def get_parameters(self, config):
         # DONE? see logic in paper
