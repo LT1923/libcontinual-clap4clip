@@ -407,19 +407,19 @@ class CLIP(nn.Module):
         return avg_distance
 
     def forward(self, image, labels=None, test=False, finetuning=False, return_mean=True, for_prior=None):
-        print(f"=== 调试信息 ===")
-        print(f"输入图像形状: {image.shape}")
-        print(f"输入图像数据类型: {image.dtype}")
-        print(f"输入图像设备: {image.device}")
+        # print(f"=== 调试信息 ===")
+        # print(f"输入图像形状: {image.shape}")
+        # print(f"输入图像数据类型: {image.dtype}")
+        # print(f"输入图像设备: {image.device}")
         
         # HACK: 确保输入格式正确
         if len(image.shape) == 3:
             image = image.unsqueeze(0)
-            print(f"添加批次维度后: {image.shape}")
+            # print(f"添加批次维度后: {image.shape}")
         ############以上是调试信息##########    
         
         if image.shape[-1] != 224 or image.shape[-2] != 224:
-            print(f"调整图像尺寸从 {image.shape[-2:]} 到 (224, 224)")
+            # print(f"调整图像尺寸从 {image.shape[-2:]} 到 (224, 224)")
             image = torch.nn.functional.interpolate(
                 image, 
                 size=(224, 224), 
@@ -436,14 +436,14 @@ class CLIP(nn.Module):
             
             
                 # 验证任务索引和相关属性
-        print(f"当前任务索引: {self.cur_task_idx}")
-        print(f"任务到类别数映射: {self.task_to_cls_num}")
-        print(f"总类别数: {self.n_class}")
-        
+        # print(f"当前任务索引: {self.cur_task_idx}")
+        # print(f"任务到类别数映射: {self.task_to_cls_num}")
+        # print(f"总类别数: {self.n_class}")
+
         # 安全地计算 prev_cls_num
         if self.cur_task_idx in self.task_to_cls_num:
             prev_cls_num = self.n_class - self.task_to_cls_num[self.cur_task_idx]
-            print(f"前一任务类别数: {prev_cls_num}")
+            # print(f"前一任务类别数: {prev_cls_num}")
         else:
             prev_cls_num = 0
             print(f"警告：任务 {self.cur_task_idx} 不在映射中，使用默认值 0")
@@ -802,9 +802,10 @@ class CLAP4CLIP(Finetune):
 
         loss = F.cross_entropy(output, targets) + kl_loss + prior_matching_loss
         # print("output shape:", output.shape)
-        pred = torch.argmax(output, dim=1)  # DONE: ok! or -1? or 0? output shape: torch.Size([640, 10])
+        pred = torch.argmax(output, dim=1)  # DONE: ok! output shape: torch.Size([640, 10])
         # fixed: pred和y的维度不匹配！pred shape: torch.Size([640]), y shape: torch.Size([32]) 改用target: torch.Size([640])
         acc = torch.sum(pred == targets).item()  # DONE: dim ok??? 
+        print(f"Predictions: {pred}, Targets: {targets}, Accuracy: {acc / x.size(0)}, Loss: {loss.item()}")  # for debug
         # todo: accuracy的计算方法不对。参考clap4clip/classifier/evaluator.py和clap4clip/utils/eval.py
         return pred, acc / x.size(0), loss
 
@@ -815,9 +816,16 @@ class CLAP4CLIP(Finetune):
         y = y.to(self.device)
 
         logits, _ = self.model(x.cuda(device=self.kwargs["default_gpu"]), y, test=True, return_mean=False)
-        # todo: 从logits到accuracy的计算方法不对。参考clap4clip/classifier/evaluator.py和clap4clip/utils/eval.py
+        
+        # DONE: 从logits到accuracy的计算方法不对。参考clap4clip/classifier/evaluator.py和clap4clip/utils/eval.py
+        if logits.dim() == 3:
+            # 变分：平均所有采样, 参考evaluator.py
+            logits = logits.mean(0)  # [batch_size, num_classes]
+        
+        # print(f"预测结果: {pred}")
+        # print(f"真实标签: {y}")
         pred = torch.argmax(logits, dim=1)  # !!!
-        acc = torch.sum(pred == y).item()
+        acc = (pred == y).float().mean().item()
         return pred, acc / x.size(0)
 
     def before_task(self, task_idx, buffer, train_loader, test_loaders):
