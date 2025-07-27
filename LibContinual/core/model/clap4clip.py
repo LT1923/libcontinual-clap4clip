@@ -74,7 +74,7 @@ class Adapter(nn.Module):
         # 强制初始化
         self._force_init_weights()
         
-        print(f"Adapter created - sigma: {self.sigma}")
+        # print(f"Adapter created - sigma: {self.sigma}")
         self._debug_weights()
         
     def _force_init_weights(self):
@@ -84,12 +84,12 @@ class Adapter(nn.Module):
                 # Sigma适配器：使用非常小的权重
                 self.fc[0].weight.fill_(0.001)  # 几乎为0的权重
                 self.fc[0].bias.fill_(-3.0)     # 较大的负偏置
-                print("Sigma adapter: 强制初始化为小权重")
+                # print("Sigma adapter: 强制初始化为小权重")
             else:
                 # Mu适配器：标准小权重初始化
                 nn.init.xavier_uniform_(self.fc[0].weight, gain=0.01)
                 nn.init.zeros_(self.fc[0].bias)
-                print("Mu adapter: 标准初始化")
+                # print("Mu adapter: 标准初始化")
     
     def _debug_weights(self):
         """调试权重信息"""
@@ -103,19 +103,19 @@ class Adapter(nn.Module):
 
     def forward(self, x):
         print(f"\n=== Adapter Forward (sigma={self.sigma}) ===")
-        # print(f"输入x形状: {x.shape}")
-        # print(f"输入x范围: {x.min().item():.4f} to {x.max().item():.4f}")
-        # print(f"输入x是否包含NaN: {torch.isnan(x).any()}")
-        # print(f"输入x是否包含Inf: {torch.isinf(x).any()}")
+        print(f"输入x形状: {x.shape}")
+        print(f"输入x范围: {x.min().item():.4f} to {x.max().item():.4f}")
+        print(f"输入x是否包含NaN: {torch.isnan(x).any()}")
+        print(f"输入x是否包含Inf: {torch.isinf(x).any()}")
         
         # 检查权重状态
         weight = self.fc[0].weight
         bias = self.fc[0].bias
         
-        # print(f"当前权重范围: {weight.min().item():.6f} to {weight.max().item():.6f}")
-        # print(f"当前偏置范围: {bias.min().item():.6f} to {bias.max().item():.6f}")
-        # print(f"权重包含NaN: {torch.isnan(weight).any()}")
-        # print(f"偏置包含NaN: {torch.isnan(bias).any()}")
+        print(f"当前权重范围: {weight.min().item():.6f} to {weight.max().item():.6f}")
+        print(f"当前偏置范围: {bias.min().item():.6f} to {bias.max().item():.6f}")
+        print(f"权重包含NaN: {torch.isnan(weight).any()}")
+        print(f"偏置包含NaN: {torch.isnan(bias).any()}")
         
         # 如果权重已经是NaN，强制重新初始化
         if torch.isnan(weight).any() or torch.isnan(bias).any():
@@ -407,7 +407,8 @@ class CLIP(nn.Module):
         return avg_distance
 
     def forward(self, image, labels=None, test=False, finetuning=False, return_mean=True, for_prior=None):
-        # print(f"=== 调试信息 ===")
+        
+                # print(f"=== 调试信息 ===")
         # print(f"输入图像形状: {image.shape}")
         # print(f"输入图像数据类型: {image.dtype}")
         # print(f"输入图像设备: {image.device}")
@@ -426,7 +427,8 @@ class CLIP(nn.Module):
                 mode='bilinear', 
                 align_corners=False
             )
-            print(f"调整后图像形状: {image.shape}")       
+            # print(f"调整后图像形状: {image.shape}")       
+        
         
         with torch.no_grad():
             image_features = self.image_encoder(image.type(self.dtype))
@@ -763,6 +765,27 @@ class CLAP4CLIP(Finetune):
         self.ckpt_path = self.kwargs["ckpt_path"] 
         self.checkpoint = self.kwargs["checkpoint"]
         
+        # fixed: 应用数据变换 todo: 为什么变换之后准确率骤降成20%？
+        self.train_transforms_list = [
+        transforms.Resize(224, interpolation=BICUBIC),
+        transforms.CenterCrop(224),
+        lambda image: image.convert("RGB"),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize((0.48145466, 0.4578275, 0.40821073),(0.26862954,0.26130258, 0.27577711)),
+        ]
+    
+        self.test_transforms_list = [
+        transforms.Resize(224, interpolation=BICUBIC),
+        transforms.CenterCrop(224),
+        lambda image: image.convert("RGB"),
+        transforms.ToTensor(),
+        transforms.Normalize((0.48145466, 0.4578275, 0.40821073),(0.26862954,0.26130258, 0.27577711)),
+        ]
+        
+        self.train_transform = transforms.Compose(self.train_transforms_list)
+        self.test_transform = transforms.Compose(self.test_transforms_list)
+        
         def mkdir_p(path):  # todo: this func should not be placed here, and should be written in utils files...
             '''make dir if not exist'''
             try:
@@ -797,6 +820,7 @@ class CLAP4CLIP(Finetune):
         x, y = data['image'], data['label']
         x = x.to(self.device)
         y = y.to(self.device)
+        # x = torch.stack([self.train_transform(transforms.ToPILImage()(x[i])) for i in range(x.shape[0])])  # fixed: 应用数据变换
         output, (kl_loss, prior_matching_loss, _) = self.model(x.cuda(device=self.kwargs["default_gpu"]), y)  # todo: check correct or not
         if self.kwargs["variational"]:
             targets = y.unsqueeze(0).expand(output.shape[0], -1).contiguous().view(-1)
@@ -811,8 +835,9 @@ class CLAP4CLIP(Finetune):
         top1_acc = accuracy(output, targets, topk=(1,))[0]  # 计算top-1准确率  # DONE: dim ok??? 
         # print(f"Predictions: {pred}, Targets: {targets}, Accuracy: {acc / x.size(0)}, Loss: {loss.item()}")  # for debug
         # DONE: accuracy的计算方法不对。参考clap4clip/classifier/evaluator.py和clap4clip/utils/eval.py
-        acc = top1_acc.item()  
-        print("Observe Accuracy:", acc) 
+        print("Observe loss:",loss)
+        acc = top1_acc.item() / 100.0
+        # print("Observe Accuracy:", acc) 
         return pred, acc, loss
 
     def inference(self, data):
@@ -820,6 +845,7 @@ class CLAP4CLIP(Finetune):
         x, y = data['image'], data['label']
         x = x.to(self.device)
         y = y.to(self.device)
+        # x = torch.stack([self.test_transform(transforms.ToPILImage()(x[i])) for i in range(x.shape[0])])# fixed: 应用数据变换
 
         logits, _ = self.model(x.cuda(device=self.kwargs["default_gpu"]), y, test=True, return_mean=False)
         
@@ -838,12 +864,12 @@ class CLAP4CLIP(Finetune):
     def before_task(self, task_idx, buffer, train_loader, test_loaders):
         
         self.update_task_idx(task_idx)# fixed: 任务索引更新
-        # todo: check ok? 
+        # DONE: check ok? 
         self.task_to_cls_num[task_idx] = len(train_loader.dataset.get_class_names())  # todo: why dataset has this attr--class_names
         self.current_class_names += train_loader.dataset.get_class_names()# fixed : dataset has no attribute named 'class_names'
         # self.prompt_templates = train_loader.dataset.prompt_templates  # DONE: 复杂。需要自己搓。不属于kwargs
         self.prompt_templates = ["a photo of a {}."] # fixed: 相当于 cifar100 的 sigle templates, 还有 ensemble 方法没有实现
-        # todo: 如何利用 clap4clip 对 cifar100 自定义的类别顺序？
+        # DONE: 如何利用 clap4clip 对 cifar100 自定义的类别顺序？好像不用，被注释掉了。
         self.cur_task_idx = task_idx
 
         if len(train_loader.dataset)< self.kwargs["train_batch_size"]:
@@ -858,31 +884,45 @@ class CLAP4CLIP(Finetune):
             self.model.vga.train()
             
         # todo: memory
-        if task_idx > 0:
-            with open(self.save_path + "memory_"+str(task_idx)+".pickle", "rb") as f:
-                buf = pickle.load(f)
-                buffer.images = list(buf["images"])
-                buffer.labels = list(buf["labels"])
+        # if task_idx > 0:
+        #     with open(self.save_path + "memory_"+str(task_idx)+".pickle", "rb") as f:
+        #         buf = pickle.load(f)
+        #         buffer.images = list(buf["images"])
+        #         buffer.labels = list(buf["labels"])
+        
+    def get_current_task_class_indexes(self, task_idx):
+        """计算当前任务的类别索引"""
+        start_idx = 0
+        for i in range(task_idx):
+            start_idx += self.task_to_cls_num[i]
+        
+        end_idx = start_idx + self.task_to_cls_num[task_idx]
+        cur_cls_indexes = list(range(start_idx, end_idx))
+        
+        print(f"Task {task_idx} class indexes: {cur_cls_indexes}")
+        return cur_cls_indexes
 
     def after_task(self, task_idx, buffer, train_loader, test_loaders):
         print("+++++ after_task +++++")
         # check ok?
         self.model.eval()
         self.model.set_classifier()
+        cur_cls_indexes = self.get_current_task_class_indexes(task_idx)
 
         # 统计 inter_adapter_distances、class centroids 等
         # if self.args.get_adapter_distances:
         #     self.compute_adapter_distances()
         
         if task_idx > 0:
-            trsf = [  # todo: maybe no need
-                transforms.Resize(224, interpolation=BICUBIC),
-                transforms.CenterCrop(224),
-                lambda image: image.convert("RGB"),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize((0.48145466, 0.4578275, 0.40821073),(0.26862954,0.26130258, 0.27577711)),
-            ]
+            trsf = transforms.Compose([
+            transforms.Resize(224, interpolation=BICUBIC, antialias=True),
+            transforms.CenterCrop(224),
+            lambda image: image.convert("RGB"),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.48145466, 0.4578275, 0.40821073),
+                               (0.26862954, 0.26130258, 0.27577711)),
+        ])
             buffer.update(self.model, train_loader, trsf, task_idx, self.kwargs["total_cls_num"], cur_cls_indexes, self.device)  # ???
             buffer.reduce_old_data(task_idx, self.kwargs["total_cls_num"])
             with open(self.kwargs["save_path"] + "memory_"+str(task_idx)+".pickle", "wb") as f:
@@ -996,6 +1036,7 @@ class CLAP4CLIP(Finetune):
             print(f"Updated cur_task_idx to {task_idx}")
     
     def finetuning(self, data):
+        # todo: use buffer for finetuning instead of memory_loader
         self.unfreeze_for_finetuning()
         self.cur_iter_idx = 0
         memory_loader = data['memory_loader']
