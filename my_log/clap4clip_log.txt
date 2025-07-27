@@ -1637,9 +1637,9 @@ Task 0 inference::  97%|█████████▋| 31/32 [00:04<00:00,  7.0
 Task 0 inference:: 100%|██████████| 32/32 [00:04<00:00,  6.96it/s]
 Average inference time: 0.13304753601551056
 Avg. Expected Calibration Error: 0.05308268219232559
-Acc avg: 0.945, Acc last: 0.945
+ avg: 0.945, Acc last: 0.945
 TaW Acc avg: 0.945, TaW Acc last: 0.945
-Cur sess: 0, Cur task: 1
+Cur sess: 0, Cur task: 1Acc
 Increments:  [10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
 ses: 1
 {'min_class': 10, 'max_class': 20, 'task': 1, 'max_task': 10, 'n_train_data': 7000, 'n_test_data': 2000, 'memory size': 0}

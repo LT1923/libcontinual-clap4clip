@@ -38,7 +38,7 @@ except ImportError:
     from PIL import Image
     BICUBIC = Image.BICUBIC
     
-from ..utils.clap4clip_utils import build_cosine_scheduler, freeze_parameters, init_weights
+from ..utils.clap4clip_utils import build_cosine_scheduler, freeze_parameters, init_weights, accuracy
 
 class BufferDataset(Dataset):
     def __init__(self, images, labels, transform=None):
@@ -673,7 +673,7 @@ class CLIP(nn.Module):
 
             return logits, (kl_loss, prior_matching_loss, avg_cos_distance)
 
-    def get_kld_loss(self, logits, logits_prior):
+    def finetuning(self, logits, logits_prior):
         student_conf = -torch.logsumexp(logits, dim=-1)
         teacher_conf = -torch.logsumexp(logits_prior, dim=-1)
         # if confidence > 1, it means student has a higher energy in which case the instance should be distilled using teacher logits
@@ -808,10 +808,12 @@ class CLAP4CLIP(Finetune):
         # print("output shape:", output.shape)
         pred = torch.argmax(output, dim=1)  # DONE: ok! output shape: torch.Size([640, 10])
         # fixed: pred和y的维度不匹配！pred shape: torch.Size([640]), y shape: torch.Size([32]) 改用target: torch.Size([640])
-        acc = torch.sum(pred == targets).item()  # DONE: dim ok??? 
+        top1_acc = accuracy(output, targets, topk=(1,))[0]  # 计算top-1准确率  # DONE: dim ok??? 
         # print(f"Predictions: {pred}, Targets: {targets}, Accuracy: {acc / x.size(0)}, Loss: {loss.item()}")  # for debug
-        # todo: accuracy的计算方法不对。参考clap4clip/classifier/evaluator.py和clap4clip/utils/eval.py
-        return pred, acc / x.size(0), loss
+        # DONE: accuracy的计算方法不对。参考clap4clip/classifier/evaluator.py和clap4clip/utils/eval.py
+        acc = top1_acc.item()  
+        print("Observe Accuracy:", acc) 
+        return pred, acc, loss
 
     def inference(self, data):
         # todo: inherit all the logic from Finetune, or overwrite?
@@ -830,8 +832,9 @@ class CLAP4CLIP(Finetune):
         # print(f"真实标签: {y}")
         pred = torch.argmax(logits, dim=1)  # !!!
         acc = (pred == y).float().mean().item()
-        return pred, acc / x.size(0)
-
+        # print("Inference Accuracy:", acc/ x.size(0), "or? ", acc)  # 打印准确率
+        return pred, acc # fixed: 返回的应该是正确率
+    
     def before_task(self, task_idx, buffer, train_loader, test_loaders):
         
         self.update_task_idx(task_idx)# fixed: 任务索引更新
@@ -862,6 +865,7 @@ class CLAP4CLIP(Finetune):
                 buffer.labels = list(buf["labels"])
 
     def after_task(self, task_idx, buffer, train_loader, test_loaders):
+        print("+++++ after_task +++++")
         # check ok?
         self.model.eval()
         self.model.set_classifier()
