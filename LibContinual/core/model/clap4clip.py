@@ -102,20 +102,20 @@ class Adapter(nn.Module):
         # print(f"  偏置是否包含NaN: {torch.isnan(bias).any()}")
 
     def forward(self, x):
-        print(f"\n=== Adapter Forward (sigma={self.sigma}) ===")
-        print(f"输入x形状: {x.shape}")
-        print(f"输入x范围: {x.min().item():.4f} to {x.max().item():.4f}")
-        print(f"输入x是否包含NaN: {torch.isnan(x).any()}")
-        print(f"输入x是否包含Inf: {torch.isinf(x).any()}")
+        # print(f"\n=== Adapter Forward (sigma={self.sigma}) ===")
+        # print(f"输入x形状: {x.shape}")
+        # print(f"输入x范围: {x.min().item():.4f} to {x.max().item():.4f}")
+        # print(f"输入x是否包含NaN: {torch.isnan(x).any()}")
+        # print(f"输入x是否包含Inf: {torch.isinf(x).any()}")
         
         # 检查权重状态
         weight = self.fc[0].weight
         bias = self.fc[0].bias
         
-        print(f"当前权重范围: {weight.min().item():.6f} to {weight.max().item():.6f}")
-        print(f"当前偏置范围: {bias.min().item():.6f} to {bias.max().item():.6f}")
-        print(f"权重包含NaN: {torch.isnan(weight).any()}")
-        print(f"偏置包含NaN: {torch.isnan(bias).any()}")
+        # print(f"当前权重范围: {weight.min().item():.6f} to {weight.max().item():.6f}")
+        # print(f"当前偏置范围: {bias.min().item():.6f} to {bias.max().item():.6f}")
+        # print(f"权重包含NaN: {torch.isnan(weight).any()}")
+        # print(f"偏置包含NaN: {torch.isnan(bias).any()}")
         
         # 如果权重已经是NaN，强制重新初始化
         if torch.isnan(weight).any() or torch.isnan(bias).any():
@@ -914,19 +914,19 @@ class CLAP4CLIP(Finetune):
         #     self.compute_adapter_distances()
         
         if task_idx > 0:
-            trsf = transforms.Compose([
-            transforms.Resize(224, interpolation=BICUBIC, antialias=True),
-            transforms.CenterCrop(224),
-            lambda image: image.convert("RGB"),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize((0.48145466, 0.4578275, 0.40821073),
-                               (0.26862954, 0.26130258, 0.27577711)),
-        ])
-            buffer.update(self.model, train_loader, trsf, task_idx, self.kwargs["total_cls_num"], cur_cls_indexes, self.device)  # ???
-            buffer.reduce_old_data(task_idx, self.kwargs["total_cls_num"])
-            with open(self.kwargs["save_path"] + "memory_"+str(task_idx)+".pickle", "wb") as f:
-                pickle.dump({"images": buffer.images, "labels": buffer.lables}, f)
+        #     trsf = transforms.Compose([
+        #     transforms.Resize(224, interpolation=BICUBIC, antialias=True),
+        #     transforms.CenterCrop(224),
+        #     lambda image: image.convert("RGB"),
+        #     transforms.RandomHorizontalFlip(),
+        #     transforms.ToTensor(),
+        #     transforms.Normalize((0.48145466, 0.4578275, 0.40821073),
+        #                        (0.26862954, 0.26130258, 0.27577711)),
+        # ])
+        #     buffer.update(self.model, train_loader, trsf, task_idx, self.kwargs["total_cls_num"], cur_cls_indexes, self.device)  # ???
+        #     buffer.reduce_old_data(task_idx, self.kwargs["total_cls_num"])
+        #     with open(self.kwargs["save_path"] + "memory_"+str(task_idx)+".pickle", "wb") as f:
+        #         pickle.dump({"images": buffer.images, "labels": buffer.lables}, f)
             if self.kwargs["finetune"] and buffer is not None:
                 def seed_worker(worker_id):
                     worker_seed = torch.initial_seed() % 2 ** 32

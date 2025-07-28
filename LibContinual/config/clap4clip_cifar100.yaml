@@ -51,7 +51,7 @@ backbone:
     pretrained: True
 
 buffer:
-  name: LinearHerdingBuffer
+  name: LinearBuffer
   kwargs:
     buffer_size: 2000
     batch_size: *train_batch_size
