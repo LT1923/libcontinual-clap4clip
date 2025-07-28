@@ -835,7 +835,7 @@ class CLAP4CLIP(Finetune):
         top1_acc = accuracy(output, targets, topk=(1,))[0]  # 计算top-1准确率  # DONE: dim ok??? 
         # print(f"Predictions: {pred}, Targets: {targets}, Accuracy: {acc / x.size(0)}, Loss: {loss.item()}")  # for debug
         # DONE: accuracy的计算方法不对。参考clap4clip/classifier/evaluator.py和clap4clip/utils/eval.py
-        print("Observe loss:",loss)
+        # print("Observe loss:",loss)
         acc = top1_acc.item() / 100.0
         # print("Observe Accuracy:", acc) 
         return pred, acc, loss
@@ -936,9 +936,9 @@ class CLAP4CLIP(Finetune):
                 g = torch.Generator()
                 g.manual_seed(0)
 
-                memory_loader = DataLoader(BufferDataset(buffer.images, buffer.labels, transform=trsf),
+                memory_loader = DataLoader(BufferDataset(buffer.images, buffer.labels),
                                            batch_size=buffer.batch_size, shuffle=True,num_workers=8, worker_init_fn=seed_worker,generator=g)
-                self.finetuning({'memory_loader': memory_loader})
+                self.finetuning(memory_loader)
 
         self.model.eval()
         self.model.set_classifier() 
@@ -1035,11 +1035,10 @@ class CLAP4CLIP(Finetune):
             self.model.cur_task_idx = task_idx
             print(f"Updated cur_task_idx to {task_idx}")
     
-    def finetuning(self, data):
+    def finetuning(self, memory_loader):
         # todo: use buffer for finetuning instead of memory_loader
         self.unfreeze_for_finetuning()
         self.cur_iter_idx = 0
-        memory_loader = data['memory_loader']
         if len(memory_loader.dataset)< self.kwargs["train_batch_size"]:
             real_img_bsz = len(memory_loader.dataset)
             self.lr = self.lr * real_img_bsz / self.kwargs["train_batch_size"] 
@@ -1063,7 +1062,7 @@ class CLAP4CLIP(Finetune):
                 y = y.cuda(device=self.kwargs["default_gpu"])
                 # pdb.set_trace()
                 loss = 0.
-                if self.kwargs.variational:
+                if self.kwargs["variational"]:
                     targets = y.unsqueeze(0).expand(output.shape[0], -1).contiguous().view(-1)
                     output = output.view(-1, output.shape[-1])
                 else:
@@ -1075,13 +1074,13 @@ class CLAP4CLIP(Finetune):
 
                 if inter_adapter_distance is not None and (epoch == self.epochs-1):
                         inter_adapter_distances.append(inter_adapter_distance)
-        if self.kwargs.sess == 9 and self.kwargs.get_interclass_dist:
+        if self.cur_task_idx == 9 and self.kwargs["get_interclass_dist"]:
             with torch.no_grad():
                 self.compute_class_centroids()
         if len(inter_adapter_distances):
                 print(f"Average inter-adapter distance: {np.mean(inter_adapter_distance)}")
 
-        if self.kwargs.sess > 0 and self.kwargs.expandable_tokens:
+        if self.cur_task_idx > 0 and self.kwargs["expandable_tokens"]:
             self.epoch_log()
     
     # fixed: 没有这个方法跑不起来，但是可以照搬吗？        
@@ -1101,7 +1100,7 @@ class CLAP4CLIP(Finetune):
         param_dict = [{'params': [p for p in self.model.parameters() if p.requires_grad]}]
 
         self.optimizer = torch.optim.SGD(param_dict, lr=lr, weight_decay=self.wd)
-        total_step=self.epochs*per_epoch_steps if not finetune else self.args.finetune_epochs*per_epoch_steps
+        total_step=self.epochs*per_epoch_steps if not finetune else self.kwargs["finetune_epochs"]*per_epoch_steps
         warmup_steps = int(0.3 * total_step) if warmup else 0
         self.scheduler = build_cosine_scheduler(
             self.optimizer,
@@ -1139,7 +1138,55 @@ class CLAP4CLIP(Finetune):
             self.mu_global_adapter = Adapter(ctx_dim, ctx_dim).cuda(device=self.kwargs["default_gpu"]).type(self.clip_model.dtype)
             self.sigma_global_adapter = Adapter(ctx_dim, ctx_dim, sigma=True).cuda(device=self.kwargs["default_gpu"]).type(self.clip_model.dtype)
 
+    def unfreeze_for_finetuning(self, requires_grad=True):
+        freeze_parameters(self.vga, requires_grad=False)
+        freeze_parameters(self.mu_adapters[:-1], requires_grad=requires_grad)
+        freeze_parameters(self.sigma_adapters[:-1], requires_grad=requires_grad)
+        if self.kwargs["expandable_tokens"]:
+            freeze_parameters(self.task_tokens[:-1], requires_grad=requires_grad)
+        if requires_grad:
+            self.mu_adapters[:-1].train()
+            self.sigma_adapters[:-1].train()
+            
+    @torch.no_grad()
+    def compute_class_centroids(self):
+        class_embeddings = {}
+        for cls,  class_embedding in self.model.classwise_centroids.items():
+            class_embeddings[cls] = class_embedding.mean(0)
+        class_embeddings = dict(sorted(class_embeddings.items()))
+        class_embeddings = torch.stack(list(class_embeddings.values()))
+        class_embeddings = class_embeddings / class_embeddings.norm(dim=-1, keepdim=True)
+        pairwise_cosine_dists = class_embeddings @ class_embeddings.t()
+        pairwise_cosine_dists = pairwise_cosine_dists.cpu()
+        torch.save(pairwise_cosine_dists, "3.pt")
+        
+    
+    @torch.no_grad()
+    def epoch_log(self):  # todo: use log in LibContinual is enough...?
+        """Write here whatever you want to log on the internal state of the model."""
+        log = {}
 
+        # Compute mean distance between class tokens
+        mean_dist, min_dist, max_dist = [], float('inf'), 0.
+        for i in range(len(self.task_tokens)):
+            for j in range(i + 1, len(self.task_tokens)):
+                dist = torch.norm(self.task_tokens[i] - self.task_tokens[j], p=2).item()
+                mean_dist.append(dist)
+
+                min_dist = min(dist, min_dist)
+                max_dist = max(dist, max_dist)
+
+        if len(mean_dist) > 0:
+            mean_dist = sum(mean_dist) / len(mean_dist)
+        else:
+            mean_dist = 0.
+            min_dist = 0.
+
+        assert min_dist <= mean_dist <= max_dist, (min_dist, mean_dist, max_dist)
+        log['token_mean_dist'] = round(mean_dist, 5)
+        log['token_min_dist'] = round(min_dist, 5)
+        log['token_max_dist'] = round(max_dist, 5)
+        print(f"\n{log}")
 # ************* cifar 100 Dataset specific code *************
 
 class cifar100(Dataset):

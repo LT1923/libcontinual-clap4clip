@@ -95,6 +95,7 @@ classifier:
     get_interclass_dist: False
     ortho_loss: False
     get_adapter_distances: False
+    finetune_epochs: 2
 
     # maybe useless
     lr: 0.1

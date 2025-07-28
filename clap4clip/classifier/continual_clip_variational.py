@@ -98,7 +98,7 @@ class CLIP(nn.Module):
         self.task_to_distribution = task_to_distribution
         self.init_new_heads()
         
-        self.device = "cuda:0" if torch.cuda.is_available() else "cpu"  # todo: remove this if necessary. trick for running on my device
+        # self.device = "cuda:0" if torch.cuda.is_available() else "cpu"  # todo: remove this if necessary. trick for running on my device
 
     
     def init_new_heads(self):
@@ -133,8 +133,8 @@ class CLIP(nn.Module):
         prompts = [[temp.format(c.replace("_", " ")) for temp in self.prompt_templates] for c in self.current_class_names]
         text_features_, text_features_per_prompt = [], []
         for per_cls_prompts in prompts:
-            # per_cls_prompt_embs = tokenize(per_cls_prompts).cuda(device=self.args.default_gpu)
-            per_cls_prompt_embs = tokenize(per_cls_prompts).to(self.device)
+            per_cls_prompt_embs = tokenize(per_cls_prompts).cuda(device=self.args.default_gpu)
+            # per_cls_prompt_embs = tokenize(per_cls_prompts).to(self.device)
             text_features = self.pretrained_text_encoder(per_cls_prompt_embs)
             text_features = text_features / text_features.norm(dim=-1, keepdim=True)
             text_features_per_prompt.append(text_features)
@@ -208,8 +208,8 @@ class CLIP(nn.Module):
         False True False False False
         True False False False False
         """
-        # mask = torch.zeros(attn_shape, dtype=torch.bool).cuda(device=self.args.default_gpu)
-        mask = torch.zeros(attn_shape, dtype=torch.bool).to(self.device)
+        mask = torch.zeros(attn_shape, dtype=torch.bool).cuda(device=self.args.default_gpu)
+        # mask = torch.zeros(attn_shape, dtype=torch.bool).to(self.device)
         if self.args.expandable_tokens:
             for i in range(nb_task_tokens):
                 mask[original_query_num+i, original_query_num:original_query_num+i] = True
@@ -348,8 +348,8 @@ class CLIP(nn.Module):
                     prior_text_features = self.frozen_text_features_individual.clone()
                     sims = torch.stack([prior_text_features @ rsamples_g[r].t() for r in range(rsamples_g.shape[0])], 0)
                     sims = sims.mean(2).mean(0)
-                    # kl_losses.append(F.cross_entropy(sims,  torch.arange(sims.size(0)).cuda(device=self.args.default_gpu)) * self.args.beta)
-                    kl_losses.append(F.cross_entropy(sims,  torch.arange(sims.size(0)).to(self.device)) * self.args.beta)
+                    kl_losses.append(F.cross_entropy(sims,  torch.arange(sims.size(0)).cuda(device=self.args.default_gpu)) * self.args.beta)
+                    # kl_losses.append(F.cross_entropy(sims,  torch.arange(sims.size(0)).to(self.device)) * self.args.beta)
                     
 
             if self.args.distill and self.args.sess > 0 and self.args.alpha > 0:
@@ -402,8 +402,8 @@ class CLIP(nn.Module):
                     prior_text_features = self.frozen_text_features_individual.clone()[start_cls_idx:end_cls_idx]
                     sims = torch.stack([prior_text_features @ rsamples[r].t() for r in range(rsamples.shape[0])], 0)
                     sims = sims.mean(2).mean(0)
-                    # kl_losses.append(F.cross_entropy(sims,  torch.arange(sims.size(0)).cuda(device=self.args.default_gpu)) * self.args.beta)
-                    kl_losses.append(F.cross_entropy(sims,  torch.arange(sims.size(0)).to(self.device)) * self.args.beta)
+                    kl_losses.append(F.cross_entropy(sims,  torch.arange(sims.size(0)).cuda(device=self.args.default_gpu)) * self.args.beta)
+                    # kl_losses.append(F.cross_entropy(sims,  torch.arange(sims.size(0)).to(self.device)) * self.args.beta)
                     
                 logits_ = (logit_scale * image_features_normed @ text_features_.permute(0, 2, 1)) 
                 if finetuning or (not finetuning and self.args.sess == i):
@@ -429,8 +429,8 @@ class CLIP(nn.Module):
                 taskwise_means = torch.cat(taskwise_means)
                 # taskwise_means = taskwise_means / taskwise_means.norm(dim=-1, keepdim=True)
                 sims = taskwise_means @ taskwise_means.t()
-                # kl_losses.append(F.cross_entropy(sims,  torch.arange(sims.size(0)).cuda(device=self.args.default_gpu)) * 5)
-                kl_losses.append(F.cross_entropy(sims,  torch.arange(sims.size(0)).to(self.device)) * 5)
+                kl_losses.append(F.cross_entropy(sims,  torch.arange(sims.size(0)).cuda(device=self.args.default_gpu)) * 5)
+                # kl_losses.append(F.cross_entropy(sims,  torch.arange(sims.size(0)).to(self.device)) * 5)
                 
             logits = torch.cat(logits, -1)
            
@@ -508,10 +508,10 @@ class ClClipVariational(Evaluator):
         self.args = args
         self.current_class_names = []
         
-        self.device = "cuda:0" if torch.cuda.is_available() else "cpu"  # todo: remove this if necessary. trick for running on my device
+        # self.device = "cuda:0" if torch.cuda.is_available() else "cpu"  # todo: remove this if necessary. trick for running on my device
         
-        # decoder_layer = torch.nn.TransformerDecoderLayer(d_model=ctx_dim, nhead=1, activation='gelu', batch_first=True).cuda(device=self.args.default_gpu).type(self.clip_model.dtype)
-        decoder_layer = torch.nn.TransformerDecoderLayer(d_model=ctx_dim, nhead=1, activation='gelu', batch_first=True).to(self.device).type(self.clip_model.dtype)
+        decoder_layer = torch.nn.TransformerDecoderLayer(d_model=ctx_dim, nhead=1, activation='gelu', batch_first=True).cuda(device=self.args.default_gpu).type(self.clip_model.dtype)
+        # decoder_layer = torch.nn.TransformerDecoderLayer(d_model=ctx_dim, nhead=1, activation='gelu', batch_first=True).to(self.device).type(self.clip_model.dtype)
         
         self.vga = torch.nn.TransformerDecoder(decoder_layer, 1) if self.args.use_vga else None
         
@@ -533,8 +533,8 @@ class ClClipVariational(Evaluator):
         self.previous_vga = None
 
     def init_task_tokens(self, ctx_dim):
-        # task_token = torch.zeros((1, 1,  ctx_dim), dtype=self.clip_model.dtype, requires_grad=True).cuda(device=self.args.default_gpu)
-        task_token = torch.zeros((1, 1,  ctx_dim), dtype=self.clip_model.dtype, requires_grad=True).to(self.device) 
+        task_token = torch.zeros((1, 1,  ctx_dim), dtype=self.clip_model.dtype, requires_grad=True).cuda(device=self.args.default_gpu)
+        # task_token = torch.zeros((1, 1,  ctx_dim), dtype=self.clip_model.dtype, requires_grad=True).to(self.device) 
          
         nn.init.normal_(task_token, std=.02)
         self.task_tokens =  nn.ParameterList([nn.Parameter(task_token)]) if self.args.expandable_tokens else None 
@@ -559,12 +559,16 @@ class ClClipVariational(Evaluator):
 
     def get_variational_adapters(self, ctx_dim, global_adapter=False):
         if not global_adapter:
-            self.mu_adapters = nn.ModuleList([Adapter(ctx_dim, ctx_dim).to(self.device).type(self.clip_model.dtype)])
-            self.sigma_adapters = nn.ModuleList([Adapter(ctx_dim, ctx_dim, sigma=True).to(self.device).type(self.clip_model.dtype)])
+            self.mu_adapters = nn.ModuleList([Adapter(ctx_dim, ctx_dim).cuda(device=self.args.default_gpu).type(self.clip_model.dtype)])
+            self.sigma_adapters = nn.ModuleList([Adapter(ctx_dim, ctx_dim, sigma=True).cuda(device=self.args.default_gpu).type(self.clip_model.dtype)])
+            # self.mu_adapters = nn.ModuleList([Adapter(ctx_dim, ctx_dim).to(self.device).type(self.clip_model.dtype)])
+            # self.sigma_adapters = nn.ModuleList([Adapter(ctx_dim, ctx_dim, sigma=True).to(self.device).type(self.clip_model.dtype)])
             self.mu_adapter_deter = None
         else:
-            self.mu_global_adapter = Adapter(ctx_dim, ctx_dim).to(self.device).type(self.clip_model.dtype)
-            self.sigma_global_adapter = Adapter(ctx_dim, ctx_dim, sigma=True).to(self.device).type(self.clip_model.dtype)
+            self.mu_global_adapter = Adapter(ctx_dim, ctx_dim).cuda(device=self.args.default_gpu).type(self.clip_model.dtype)
+            self.sigma_global_adapter = Adapter(ctx_dim, ctx_dim, sigma=True).cuda(device=self.args.default_gpu).type(self.clip_model.dtype)
+            # self.mu_global_adapter = Adapter(ctx_dim, ctx_dim).to(self.device).type(self.clip_model.dtype)
+            # self.sigma_global_adapter = Adapter(ctx_dim, ctx_dim, sigma=True).to(self.device).type(self.clip_model.dtype)
 
     def fit(self, data):
         self.task_to_cls_num[self.args.sess] = len(data['class_names'])
@@ -595,10 +599,12 @@ class ClClipVariational(Evaluator):
                     self.cur_iter_idx = cur_iter_idx
                     self.scheduler.step(cur_iter_idx)
                     start_time = time.time()
-                    output, (kl_loss, prior_matching_loss, inter_adapter_distance) = self.model(x.to(self.device), y)
+                    output, (kl_loss, prior_matching_loss, inter_adapter_distance) = self.model(x.cuda(device=self.args.default_gpu), y)
+                    # output, (kl_loss, prior_matching_loss, inter_adapter_distance) = self.model(x.to(self.device), y)
                     run_time = time.time() - start_time
                     run_times.append(run_time)
-                    y = y.to(self.device)
+                    y = y.cuda(device=self.args.default_gpu)
+                    # y = y.to(self.device)
                     loss = 0.
                     # pdb.set_trace()
                     if self.args.variational:
@@ -668,14 +674,19 @@ class ClClipVariational(Evaluator):
             self.model.vga.eval()
         for epoch in tqdm(range(self.args.finetune_epochs)):
             for idx, (x, y, index) in tqdm(enumerate(memory_loader), total=len(memory_loader), desc = 'Finetuning'):
-
+                print("x:",x)
+                print("y:",y)
+                print("index:",index)
+                return
                 cur_iter_idx = epoch*per_epoch_steps+idx
                 self.cur_iter_idx = cur_iter_idx
                 self.scheduler.step(cur_iter_idx)
 
-                output, (kl_loss, prior_matching_loss, inter_adapter_distance) = self.model(x.to(self.device), y, finetuning=True)
+                output, (kl_loss, prior_matching_loss, inter_adapter_distance) = self.model(x.cuda(device=self.args.default_gpu), y, finetuning=True)
+                # output, (kl_loss, prior_matching_loss, inter_adapter_distance) = self.model(x.to(self.device), y, finetuning=True)
                 # pdb.set_trace()
-                y = y.to(self.device)
+                y = y.cuda(device=self.args.default_gpu)
+                # y = y.to(self.device)
                 # pdb.set_trace()
                 loss = 0.
                 if self.args.variational:
@@ -726,8 +737,10 @@ class ClClipVariational(Evaluator):
     def expand_adapter(self):
         ctx_dim = self.clip_model.ln_final.weight.shape[0]
         dtype = self.clip_model.dtype
-        new_mu = Adapter(ctx_dim, ctx_dim).to(self.device).type(dtype)
-        new_sigma = Adapter(ctx_dim, ctx_dim, sigma=True).to(self.device).type(dtype)
+        new_mu = Adapter(ctx_dim, ctx_dim).cuda(device=self.args.default_gpu).type(dtype)
+        new_sigma = Adapter(ctx_dim, ctx_dim, sigma=True).cuda(device=self.args.default_gpu).type(dtype)
+        # new_mu = Adapter(ctx_dim, ctx_dim).to(self.device).type(dtype)
+        # new_sigma = Adapter(ctx_dim, ctx_dim, sigma=True).to(self.device).type(dtype)
         self.mu_adapters.append(new_mu)
         self.sigma_adapters.append(new_sigma)
         self.mu_adapters[:-1].eval()
