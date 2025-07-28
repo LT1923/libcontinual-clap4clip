@@ -75,7 +75,52 @@ def construct_examplar(datasets, images, labels, feature_extractor, per_classes,
 
     return selected_images, selected_labels
 
+"""
+def balance_random_update(dataset, buffer):
+    images = np.array(datasets.images + buffer.images)
+    labels = np.array(datasets.labels + buffer.labels)
+    perm = np.random.permutation(len(labels))
 
-
+    exemplar_per_class = buffer.buffer_size // len(labels)  # cifar100的类别数不会超过2000
+    exemplars = []
+    for label in labels:
+        _exemplars =  # 怎么采样？
+        exemplars.append(_exemplars)
     
-        
+    buffer.images = exemplars.tolist()
+    # images, labels = images[perm[:buffer.buffer_size]], labels[perm[:buffer.buffer_size]]
+
+    # buffer.images = images.tolist()
+    buffer.labels = labels.tolist()
+"""
+
+def balance_random_update(dataset, buffer):
+    images = np.array(dataset.images + buffer.images)
+    labels = np.array(dataset.labels + buffer.labels)
+    
+    perm = np.random.permutation(len(labels))
+    images = images[perm]
+    labels = labels[perm]
+    
+    unique_labels = np.unique(labels)
+    exemplar_per_class = buffer.buffer_size // len(unique_labels)
+    
+    exemplars = []
+    exemplar_labels = []
+    
+    for label in unique_labels:
+        class_indices = np.where(labels == label)[0]
+        if len(class_indices) > exemplar_per_class:
+            selected_indices = np.random.choice(class_indices, exemplar_per_class, replace=False)
+        else:
+            selected_indices = class_indices
+        exemplars.extend(images[selected_indices])
+        exemplar_labels.extend(labels[selected_indices])
+    
+    if len(exemplars) > buffer.buffer_size:
+        selected_indices = np.random.choice(len(exemplars), buffer.buffer_size, replace=False)
+        exemplars = np.array(exemplars)[selected_indices]
+        exemplar_labels = np.array(exemplar_labels)[selected_indices]
+    
+    buffer.images = exemplars.tolist()
+    buffer.labels = exemplar_labels.tolist()

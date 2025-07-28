@@ -225,7 +225,9 @@ class IncrementalDataset:
                                                                   shuffle=False,num_workers=8, 
                                                                   sampler=SubsetRandomSampler(test_indices, False),
                                                                   worker_init_fn=seed_worker,
-                                                                    generator=g,))
+                                                                    generator=g,))  
+        
+        
         ood_test_loader = self.get_future_tasks_test_loader()
         if past_dataset_memory is not None:
             if self.past_memory_dataset is None:
@@ -251,6 +253,7 @@ class IncrementalDataset:
                                                              worker_init_fn=seed_worker,
                                                              generator=g)
             n_train_data = len(train_indices) + len(self.past_memory_dataset)
+            print("len of self.train_data_loader:",len(self.train_data_loader))
         else:
             self.train_data_loader = torch.utils.data.DataLoader(self.train_dataset, batch_size=self._batch_size,
                                                              shuffle=False,num_workers=8, 

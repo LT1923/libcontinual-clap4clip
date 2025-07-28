@@ -19,7 +19,7 @@ class ExemplarSelector():
         self.train_dataset = dataset
         self.val_transform = transform
 
-class RandomExemplarsSelector(ExemplarSelector):
+class RandomExemplarsSelector(ExemplarSelector):  # todo
     """Selection of new samples. This is based on random selection, which produces a random list of samples."""
 
     def __init__(self, args):

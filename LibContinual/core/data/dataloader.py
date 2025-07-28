@@ -110,9 +110,9 @@ def get_dataloader(config, mode, cls_map=None):
 
     elif cls_map is None and dataset != 'binary_cifar100':
         # Apply class_order for debugging
-        cls_list = sorted(os.listdir(os.path.join(data_root, mode)))
+        cls_list = sorted(os.listdir(os.path.join(data_root, mode)))  # 默认按字母顺序排序
         #random.shuffle(cls_list)
-        if 'class_order' in config.keys():
+        if 'class_order' in config.keys():  # todo: 指定类顺序，说不定能用上
             class_order = config['class_order']
             perm = class_order
         else: 
@@ -121,7 +121,7 @@ def get_dataloader(config, mode, cls_map=None):
         for label, ori_label in enumerate(perm):
             cls_map[label] = cls_list[ori_label]
 
-    if mode == 'train' and 'imb_type' in config.keys():
+    if mode == 'train' and 'imb_type' in config.keys():  # todo: 可选
         # generate long-tailed data to reproduce DAP
         return ImbalancedDatasets(mode, task_num, init_cls_num, inc_cls_num, data_root, cls_map, trfms, batch_size, num_workers, config['imb_type'], config['imb_factor'], config['shuffle'])
 
