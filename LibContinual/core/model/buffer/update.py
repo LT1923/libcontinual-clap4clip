@@ -122,5 +122,5 @@ def balance_random_update(dataset, buffer):
         exemplars = np.array(exemplars)[selected_indices]
         exemplar_labels = np.array(exemplar_labels)[selected_indices]
     
-    buffer.images = exemplars.tolist()
-    buffer.labels = exemplar_labels.tolist()
+    buffer.images = exemplars
+    buffer.labels = exemplar_labels
