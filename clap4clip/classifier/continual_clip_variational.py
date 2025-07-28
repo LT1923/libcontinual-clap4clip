@@ -649,7 +649,7 @@ class ClClipVariational(Evaluator):
         self.model.eval()
         self.model.set_classifier()
         if self.args.distill and finalize:
-            self.preserve_copy_for_distillation()
+            self.preserve_copy_for_distillation()  # 在训练结束后，为知识蒸馏（distillation）保存当前模型的关键组件的副本，并冻结这些副本的参数，以便在后续任务中使用
 
     def finetuning(self, data):
         self.unfreeze_for_finetuning()

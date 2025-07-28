@@ -89,6 +89,7 @@ class ICarl(nn.Module):
 
         pred = torch.argmax(logits, dim=1)
         acc = torch.sum(pred == y).item()
+        print("acc:", acc)  # acc shape: torch.Size([])
 
         return pred, acc / x.size(0), loss
 

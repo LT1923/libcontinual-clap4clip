@@ -214,12 +214,12 @@ def main(args):
         
         args.sess=ses   # how to
       
-        if(start_sess==ses and start_sess!=0): 
+        if(start_sess==ses and start_sess!=0):  # 工程上的robustness: 在特定条件下（当前任务是程序启动时指定的起始任务且不是第一个任务--从中间开始运行），恢复上一个任务的测试样本数量记录，以便在当前任务中继续使用
             inc_dataset._current_task = ses
             with open(args.save_path + "/sample_per_task_testing_"+str(args.sess-1)+".pickle", 'rb') as handle:
                 sample_per_task_testing = pickle.load(handle)
             inc_dataset.sample_per_task_testing = sample_per_task_testing
-            args.sample_per_task_testing = sample_per_task_testing             
+            args.sample_per_task_testing = sample_per_task_testing   # 记录每个任务的测试样本数量        
             
         print('ses:',ses)
         print(task_info)    

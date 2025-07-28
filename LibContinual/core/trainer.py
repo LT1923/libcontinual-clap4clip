@@ -382,7 +382,7 @@ class Trainer(object):
                 model.after_task(task_idx, self.buffer, self.train_loader.get_loader(task_idx), self.test_loader.get_loader(task_idx))
 
             # Update Buffer
-            if method_name not in ['bic', 'ERACE', 'ERAML', 'CLAP4CLIP']:
+            if method_name not in ['bic', 'ERACE', 'ERAML']:# 用libcontinual自带的buffer更新？
                 self.buffer.total_classes += self.init_cls_num if task_idx == 0 else self.inc_cls_num
                 if self.buffer.buffer_size > 0:
                     if self.buffer.strategy == 'herding':

@@ -9,8 +9,8 @@ n_gpu: 1
 default_gpu: 0
 
 # data
-data_root: /root/autodl-tmp/ml_lab/data/cifar100/ # hlt's directory
-# data_root: /root/autodl-tmp/cifar-100/cifar-100-dir/ # gyw's directory
+# data_root: /root/autodl-tmp/ml_lab/data/cifar100/ # hlt's directory
+data_root: /root/autodl-tmp/cifar-100/cifar-100-dir/ # gyw's directory
 image_size: &image_size 32
 num_workers: 8
 dataset: cifar100
@@ -34,7 +34,7 @@ optimizer:
   name: SGD  # DONE: torch.optim.SGD(param_dict, lr=lr, weight_decay=self.wd)
   kwargs:
     lr: 1e-3
-    momentum: 0.9  # todo
+    # momentum: 0.9  # DONE: do not need momentum
     weight_decay: 0.0
 
 lr_scheduler:
@@ -77,7 +77,7 @@ classifier:
     checkpoint: ckpt/
     save_path: save/
     seed: 0 # todo: 两个seed用法一致吗？
-    variational: True
+    variational: True # 变分模式推理
     total_cls_num: *total_cls_num
     finetune: True
     distill: False
@@ -86,6 +86,7 @@ classifier:
     expandable_prompt: False
     forward_times: 20
     forward_times_global: 10
+    frozen_prior: False
     context_size: 0.67
     compute_ram: False
     use_np_prior: False

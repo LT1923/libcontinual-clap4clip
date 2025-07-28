@@ -6,3 +6,6 @@ __pycache__
 
 # Automatically downloaded, do not need to upload
 ckpt/ 
+
+save/
+
