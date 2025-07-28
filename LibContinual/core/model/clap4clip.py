@@ -38,7 +38,7 @@ except ImportError:
     from PIL import Image
     BICUBIC = Image.BICUBIC
     
-from ..utils.clap4clip_utils import build_cosine_scheduler, freeze_parameters
+from ..utils.clap4clip_utils import build_cosine_scheduler, freeze_parameters, init_weights, accuracy
 
 class BufferDataset(Dataset):
     def __init__(self, images, labels, transform=None):
@@ -67,25 +67,112 @@ def freeze_parameters(m, requires_grad=False):
 class Adapter(nn.Module):
     def __init__(self, in_dim, out_dim, sigma=False, layer_num=1):
         super().__init__()
-
+        
         self.fc = nn.Sequential(nn.Linear(in_dim, out_dim))
         self.sigma = sigma
-        # init_weights(self.fc)
         
-        print("sigma:",self.sigma,self.fc.parameters)
+        # 强制初始化
+        self._force_init_weights()
+        
+        # print(f"Adapter created - sigma: {self.sigma}")
+        self._debug_weights()
+        
+    def _force_init_weights(self):
+        """强制重新初始化权重"""
+        with torch.no_grad():
+            if self.sigma:
+                # Sigma适配器：使用非常小的权重
+                self.fc[0].weight.fill_(0.001)  # 几乎为0的权重
+                self.fc[0].bias.fill_(-3.0)     # 较大的负偏置
+                # print("Sigma adapter: 强制初始化为小权重")
+            else:
+                # Mu适配器：标准小权重初始化
+                nn.init.xavier_uniform_(self.fc[0].weight, gain=0.01)
+                nn.init.zeros_(self.fc[0].bias)
+                # print("Mu adapter: 标准初始化")
+    
+    def _debug_weights(self):
+        """调试权重信息"""
+        weight = self.fc[0].weight
+        bias = self.fc[0].bias
+        # print(f"  权重形状: {weight.shape}")
+        # print(f"  权重范围: {weight.min().item():.6f} to {weight.max().item():.6f}")
+        # print(f"  偏置范围: {bias.min().item():.6f} to {bias.max().item():.6f}")
+        # print(f"  权重是否包含NaN: {torch.isnan(weight).any()}")
+        # print(f"  偏置是否包含NaN: {torch.isnan(bias).any()}")
 
     def forward(self, x):
-        print("x:",x)
+        print(f"\n=== Adapter Forward (sigma={self.sigma}) ===")
+        print(f"输入x形状: {x.shape}")
+        print(f"输入x范围: {x.min().item():.4f} to {x.max().item():.4f}")
+        print(f"输入x是否包含NaN: {torch.isnan(x).any()}")
+        print(f"输入x是否包含Inf: {torch.isinf(x).any()}")
+        
+        # 检查权重状态
+        weight = self.fc[0].weight
+        bias = self.fc[0].bias
+        
+        print(f"当前权重范围: {weight.min().item():.6f} to {weight.max().item():.6f}")
+        print(f"当前偏置范围: {bias.min().item():.6f} to {bias.max().item():.6f}")
+        print(f"权重包含NaN: {torch.isnan(weight).any()}")
+        print(f"偏置包含NaN: {torch.isnan(bias).any()}")
+        
+        # 如果权重已经是NaN，强制重新初始化
+        if torch.isnan(weight).any() or torch.isnan(bias).any():
+            print("检测到权重NaN，强制重新初始化")
+            self._force_init_weights()
+        
+        # 如果输入有问题，清理输入
+        if torch.isnan(x).any() or torch.isinf(x).any():
+            print("输入包含NaN/Inf，进行清理")
+            x = torch.nan_to_num(x, nan=0.0, posinf=1.0, neginf=-1.0)
+            print(f"清理后输入范围: {x.min().item():.4f} to {x.max().item():.4f}")
+        
+        # 计算线性变换
+        try:
+            fc_output = self.fc(x)
+            print(f"线性层输出范围: {fc_output.min().item():.4f} to {fc_output.max().item():.4f}")
+            print(f"线性层输出包含NaN: {torch.isnan(fc_output).any()}")
+        except Exception as e:
+            print(f"线性层计算出错: {e}")
+            # 创建安全的输出
+            fc_output = torch.zeros_like(x) if not self.sigma else torch.full_like(x, -2.0)
+        
+        # 检查线性层输出
+        if torch.isnan(fc_output).any() or torch.isinf(fc_output).any():
+            print("线性层输出包含NaN/Inf，使用安全默认值")
+            if self.sigma:
+                fc_output = torch.full_like(x, -2.0)  # 对sigma使用负值
+            else:
+                fc_output = torch.zeros_like(x)       # 对mu使用零值
+            print(f"安全默认值范围: {fc_output.min().item():.4f} to {fc_output.max().item():.4f}")
+        
         if self.sigma:
-            print("sigma")
-            print("fc:", self.fc(x))
-            print("softplus:",F.softplus(self.fc(x)))
-            return F.softplus(self.fc(x)) * 0.999 + 0.001
+            print("应用sigma变换...")
+            # 限制范围，防止softplus溢出
+            fc_output_clamped = torch.clamp(fc_output, min=-10.0, max=5.0)
+            print(f"限制后范围: {fc_output_clamped.min().item():.4f} to {fc_output_clamped.max().item():.4f}")
+            
+            try:
+                softplus_output = F.softplus(fc_output_clamped)
+                print(f"softplus输出范围: {softplus_output.min().item():.4f} to {softplus_output.max().item():.4f}")
+                print(f"softplus输出包含NaN: {torch.isnan(softplus_output).any()}")
+                
+                if torch.isnan(softplus_output).any():
+                    print("softplus产生NaN，使用备用方案")
+                    result = torch.full_like(softplus_output, 0.1)
+                else:
+                    result = softplus_output * 0.999 + 0.001
+                    
+            except Exception as e:
+                print(f"softplus计算出错: {e}")
+                result = torch.full_like(fc_output_clamped, 0.1)
+            
+            print(f"最终sigma输出范围: {result.min().item():.4f} to {result.max().item():.4f}")
+            return result
         else:
-            print("no sigma")
-            print(self.fc(x))
-            return self.fc(x)
-
+            print(f"最终mu输出范围: {fc_output.min().item():.4f} to {fc_output.max().item():.4f}")
+            return fc_output
 
 class TextEncoder(nn.Module):
     def __init__(self, clip_model):
@@ -320,26 +407,28 @@ class CLIP(nn.Module):
         return avg_distance
 
     def forward(self, image, labels=None, test=False, finetuning=False, return_mean=True, for_prior=None):
-        print(f"=== 调试信息 ===")
-        print(f"输入图像形状: {image.shape}")
-        print(f"输入图像数据类型: {image.dtype}")
-        print(f"输入图像设备: {image.device}")
         
-        # 确保输入格式正确
+                # print(f"=== 调试信息 ===")
+        # print(f"输入图像形状: {image.shape}")
+        # print(f"输入图像数据类型: {image.dtype}")
+        # print(f"输入图像设备: {image.device}")
+        
+        # HACK: 确保输入格式正确
         if len(image.shape) == 3:
             image = image.unsqueeze(0)
-            print(f"添加批次维度后: {image.shape}")
+            # print(f"添加批次维度后: {image.shape}")
         ############以上是调试信息##########    
         
         if image.shape[-1] != 224 or image.shape[-2] != 224:
-            print(f"调整图像尺寸从 {image.shape[-2:]} 到 (224, 224)")
+            # print(f"调整图像尺寸从 {image.shape[-2:]} 到 (224, 224)")
             image = torch.nn.functional.interpolate(
                 image, 
                 size=(224, 224), 
                 mode='bilinear', 
                 align_corners=False
             )
-            print(f"调整后图像形状: {image.shape}")       
+            # print(f"调整后图像形状: {image.shape}")       
+        
         
         with torch.no_grad():
             image_features = self.image_encoder(image.type(self.dtype))
@@ -349,14 +438,14 @@ class CLIP(nn.Module):
             
             
                 # 验证任务索引和相关属性
-        print(f"当前任务索引: {self.cur_task_idx}")
-        print(f"任务到类别数映射: {self.task_to_cls_num}")
-        print(f"总类别数: {self.n_class}")
-        
+        # print(f"当前任务索引: {self.cur_task_idx}")
+        # print(f"任务到类别数映射: {self.task_to_cls_num}")
+        # print(f"总类别数: {self.n_class}")
+
         # 安全地计算 prev_cls_num
         if self.cur_task_idx in self.task_to_cls_num:
             prev_cls_num = self.n_class - self.task_to_cls_num[self.cur_task_idx]
-            print(f"前一任务类别数: {prev_cls_num}")
+            # print(f"前一任务类别数: {prev_cls_num}")
         else:
             prev_cls_num = 0
             print(f"警告：任务 {self.cur_task_idx} 不在映射中，使用默认值 0")
@@ -586,7 +675,7 @@ class CLIP(nn.Module):
 
             return logits, (kl_loss, prior_matching_loss, avg_cos_distance)
 
-    def get_kld_loss(self, logits, logits_prior):
+    def finetuning(self, logits, logits_prior):
         student_conf = -torch.logsumexp(logits, dim=-1)
         teacher_conf = -torch.logsumexp(logits_prior, dim=-1)
         # if confidence > 1, it means student has a higher energy in which case the instance should be distilled using teacher logits
@@ -672,6 +761,31 @@ class CLAP4CLIP(Finetune):
         self.cur_task_idx = 0
 
         # directories
+        self.save_path = kwargs["save_path"]
+        self.ckpt_path = self.kwargs["ckpt_path"] 
+        self.checkpoint = self.kwargs["checkpoint"]
+        
+        # fixed: 应用数据变换 todo: 为什么变换之后准确率骤降成20%？
+        self.train_transforms_list = [
+        transforms.Resize(224, interpolation=BICUBIC),
+        transforms.CenterCrop(224),
+        lambda image: image.convert("RGB"),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize((0.48145466, 0.4578275, 0.40821073),(0.26862954,0.26130258, 0.27577711)),
+        ]
+    
+        self.test_transforms_list = [
+        transforms.Resize(224, interpolation=BICUBIC),
+        transforms.CenterCrop(224),
+        lambda image: image.convert("RGB"),
+        transforms.ToTensor(),
+        transforms.Normalize((0.48145466, 0.4578275, 0.40821073),(0.26862954,0.26130258, 0.27577711)),
+        ]
+        
+        self.train_transform = transforms.Compose(self.train_transforms_list)
+        self.test_transform = transforms.Compose(self.test_transforms_list)
+        
         def mkdir_p(path):  # todo: this func should not be placed here, and should be written in utils files...
             '''make dir if not exist'''
             try:
@@ -696,9 +810,7 @@ class CLAP4CLIP(Finetune):
 
     def observe(self, data):
         # todo: inherit all the logic from Finetune, or overwrite?
-        # todo: 接口对齐
-        
-        
+        # DONE: 接口对齐
         # 确保任务索引同步
         if hasattr(self, 'model') and self.model is not None:
             if self.model.cur_task_idx != self.cur_task_idx:
@@ -708,6 +820,7 @@ class CLAP4CLIP(Finetune):
         x, y = data['image'], data['label']
         x = x.to(self.device)
         y = y.to(self.device)
+        # x = torch.stack([self.train_transform(transforms.ToPILImage()(x[i])) for i in range(x.shape[0])])  # fixed: 应用数据变换
         output, (kl_loss, prior_matching_loss, _) = self.model(x.cuda(device=self.kwargs["default_gpu"]), y)  # todo: check correct or not
         if self.kwargs["variational"]:
             targets = y.unsqueeze(0).expand(output.shape[0], -1).contiguous().view(-1)
@@ -716,30 +829,47 @@ class CLAP4CLIP(Finetune):
             targets = y
 
         loss = F.cross_entropy(output, targets) + kl_loss + prior_matching_loss
-        pred = torch.argmax(output, dim=1)  # ok? or -1? or 0?
-        acc = torch.sum(pred == y).item()  # dim ok???
-        return pred, acc / x.size(0), loss
+        # print("output shape:", output.shape)
+        pred = torch.argmax(output, dim=1)  # DONE: ok! output shape: torch.Size([640, 10])
+        # fixed: pred和y的维度不匹配！pred shape: torch.Size([640]), y shape: torch.Size([32]) 改用target: torch.Size([640])
+        top1_acc = accuracy(output, targets, topk=(1,))[0]  # 计算top-1准确率  # DONE: dim ok??? 
+        # print(f"Predictions: {pred}, Targets: {targets}, Accuracy: {acc / x.size(0)}, Loss: {loss.item()}")  # for debug
+        # DONE: accuracy的计算方法不对。参考clap4clip/classifier/evaluator.py和clap4clip/utils/eval.py
+        print("Observe loss:",loss)
+        acc = top1_acc.item() / 100.0
+        # print("Observe Accuracy:", acc) 
+        return pred, acc, loss
 
     def inference(self, data):
         # todo: inherit all the logic from Finetune, or overwrite?
         x, y = data['image'], data['label']
         x = x.to(self.device)
         y = y.to(self.device)
+        # x = torch.stack([self.test_transform(transforms.ToPILImage()(x[i])) for i in range(x.shape[0])])# fixed: 应用数据变换
 
         logits, _ = self.model(x.cuda(device=self.kwargs["default_gpu"]), y, test=True, return_mean=False)
+        
+        # DONE: 从logits到accuracy的计算方法不对。参考clap4clip/classifier/evaluator.py和clap4clip/utils/eval.py
+        if logits.dim() == 3:
+            # 变分：平均所有采样, 参考evaluator.py
+            logits = logits.mean(0)  # [batch_size, num_classes]
+        
+        # print(f"预测结果: {pred}")
+        # print(f"真实标签: {y}")
         pred = torch.argmax(logits, dim=1)  # !!!
-        acc = torch.sum(pred == y).item()
-        return pred, acc / x.size(0)
-
+        acc = (pred == y).float().mean().item()
+        # print("Inference Accuracy:", acc/ x.size(0), "or? ", acc)  # 打印准确率
+        return pred, acc # fixed: 返回的应该是正确率
+    
     def before_task(self, task_idx, buffer, train_loader, test_loaders):
         
         self.update_task_idx(task_idx)# fixed: 任务索引更新
-        # todo: check ok? 
+        # DONE: check ok? 
         self.task_to_cls_num[task_idx] = len(train_loader.dataset.get_class_names())  # todo: why dataset has this attr--class_names
         self.current_class_names += train_loader.dataset.get_class_names()# fixed : dataset has no attribute named 'class_names'
         # self.prompt_templates = train_loader.dataset.prompt_templates  # DONE: 复杂。需要自己搓。不属于kwargs
         self.prompt_templates = ["a photo of a {}."] # fixed: 相当于 cifar100 的 sigle templates, 还有 ensemble 方法没有实现
-        # todo: 如何利用 clap4clip 对 cifar100 自定义的类别顺序？
+        # DONE: 如何利用 clap4clip 对 cifar100 自定义的类别顺序？好像不用，被注释掉了。
         self.cur_task_idx = task_idx
 
         if len(train_loader.dataset)< self.kwargs["train_batch_size"]:
@@ -754,33 +884,48 @@ class CLAP4CLIP(Finetune):
             self.model.vga.train()
             
         # todo: memory
-        if task_idx > 0:
-            with open(self.save_path + "/memory_"+str(task_idx)+".pickle", "rb") as f:
-                buf = pickle.load(f)
-                buffer.images = list(buf["images"])
-                buffer.labels = list(buf["labels"])
+        # if task_idx > 0:
+        #     with open(self.save_path + "memory_"+str(task_idx)+".pickle", "rb") as f:
+        #         buf = pickle.load(f)
+        #         buffer.images = list(buf["images"])
+        #         buffer.labels = list(buf["labels"])
+        
+    def get_current_task_class_indexes(self, task_idx):
+        """计算当前任务的类别索引"""
+        start_idx = 0
+        for i in range(task_idx):
+            start_idx += self.task_to_cls_num[i]
+        
+        end_idx = start_idx + self.task_to_cls_num[task_idx]
+        cur_cls_indexes = list(range(start_idx, end_idx))
+        
+        print(f"Task {task_idx} class indexes: {cur_cls_indexes}")
+        return cur_cls_indexes
 
     def after_task(self, task_idx, buffer, train_loader, test_loaders):
+        print("+++++ after_task +++++")
         # check ok?
         self.model.eval()
         self.model.set_classifier()
+        cur_cls_indexes = self.get_current_task_class_indexes(task_idx)
 
         # 统计 inter_adapter_distances、class centroids 等
         # if self.args.get_adapter_distances:
         #     self.compute_adapter_distances()
         
         if task_idx > 0:
-            trsf = [  # todo: maybe no need
-                transforms.Resize(224, interpolation=BICUBIC),
-                transforms.CenterCrop(224),
-                lambda image: image.convert("RGB"),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize((0.48145466, 0.4578275, 0.40821073),(0.26862954,0.26130258, 0.27577711)),
-            ]
+            trsf = transforms.Compose([
+            transforms.Resize(224, interpolation=BICUBIC, antialias=True),
+            transforms.CenterCrop(224),
+            lambda image: image.convert("RGB"),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.48145466, 0.4578275, 0.40821073),
+                               (0.26862954, 0.26130258, 0.27577711)),
+        ])
             buffer.update(self.model, train_loader, trsf, task_idx, self.kwargs["total_cls_num"], cur_cls_indexes, self.device)  # ???
             buffer.reduce_old_data(task_idx, self.kwargs["total_cls_num"])
-            with open(self.kwargs["save_path"] + "/memory_"+str(task_idx)+".pickle", "wb") as f:
+            with open(self.kwargs["save_path"] + "memory_"+str(task_idx)+".pickle", "wb") as f:
                 pickle.dump({"images": buffer.images, "labels": buffer.lables}, f)
             if self.kwargs["finetune"] and buffer is not None:
                 def seed_worker(worker_id):
@@ -799,6 +944,35 @@ class CLAP4CLIP(Finetune):
         self.model.set_classifier() 
         if self.kwargs["distill"]:
             self.preserve_copy_for_distillation()
+            
+    def expand_adapter(self):
+        ctx_dim = self.clip_model.ln_final.weight.shape[0]
+        dtype = self.clip_model.dtype
+        new_mu = Adapter(ctx_dim, ctx_dim).cuda(device=self.kwargs["default_gpu"]).type(dtype)
+        new_sigma = Adapter(ctx_dim, ctx_dim, sigma=True).cuda(device=self.kwargs["default_gpu"]).type(dtype)
+        self.mu_adapters.append(new_mu)
+        self.sigma_adapters.append(new_sigma)
+        self.mu_adapters[:-1].eval()
+        self.sigma_adapters[:-1].eval()
+        freeze_parameters(self.mu_adapters[:-1], requires_grad=False)
+        freeze_parameters(self.sigma_adapters[:-1], requires_grad=False)
+        freeze_parameters(self.mu_adapters[-1], requires_grad=True)
+        freeze_parameters(self.sigma_adapters[-1], requires_grad=True)
+        
+    def expand_task_token_list(self):
+        new_task_token = deepcopy(self.task_tokens[-1])
+        nn.init.trunc_normal_(new_task_token, std=.02)
+        self.task_tokens.append(new_task_token)
+        freeze_parameters(self.task_tokens[:-1], requires_grad=False)
+        freeze_parameters(self.task_tokens[-1], requires_grad=True)
+        
+    def expand_prompts(self):
+        ctx_vectors = deepcopy(self.ctx[-1])
+        nn.init.normal_(ctx_vectors, std=0.02)
+        self.ctx.append(ctx_vectors)
+        freeze_parameters(self.ctx[:-1], requires_grad=False)
+        freeze_parameters(self.ctx[-1], requires_grad=True)
+
 
     def get_parameters(self, config):
         # DONE? see logic in paper
@@ -862,6 +1036,7 @@ class CLAP4CLIP(Finetune):
             print(f"Updated cur_task_idx to {task_idx}")
     
     def finetuning(self, data):
+        # todo: use buffer for finetuning instead of memory_loader
         self.unfreeze_for_finetuning()
         self.cur_iter_idx = 0
         memory_loader = data['memory_loader']
