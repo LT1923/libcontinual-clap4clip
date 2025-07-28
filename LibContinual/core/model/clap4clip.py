@@ -131,8 +131,8 @@ class Adapter(nn.Module):
         # 计算线性变换
         try:
             fc_output = self.fc(x)
-            print(f"线性层输出范围: {fc_output.min().item():.4f} to {fc_output.max().item():.4f}")
-            print(f"线性层输出包含NaN: {torch.isnan(fc_output).any()}")
+            # print(f"线性层输出范围: {fc_output.min().item():.4f} to {fc_output.max().item():.4f}")
+            # print(f"线性层输出包含NaN: {torch.isnan(fc_output).any()}")
         except Exception as e:
             print(f"线性层计算出错: {e}")
             # 创建安全的输出
@@ -148,15 +148,15 @@ class Adapter(nn.Module):
             print(f"安全默认值范围: {fc_output.min().item():.4f} to {fc_output.max().item():.4f}")
         
         if self.sigma:
-            print("应用sigma变换...")
+            # print("应用sigma变换...")
             # 限制范围，防止softplus溢出
             fc_output_clamped = torch.clamp(fc_output, min=-10.0, max=5.0)
-            print(f"限制后范围: {fc_output_clamped.min().item():.4f} to {fc_output_clamped.max().item():.4f}")
+            # print(f"限制后范围: {fc_output_clamped.min().item():.4f} to {fc_output_clamped.max().item():.4f}")
             
             try:
                 softplus_output = F.softplus(fc_output_clamped)
-                print(f"softplus输出范围: {softplus_output.min().item():.4f} to {softplus_output.max().item():.4f}")
-                print(f"softplus输出包含NaN: {torch.isnan(softplus_output).any()}")
+                # print(f"softplus输出范围: {softplus_output.min().item():.4f} to {softplus_output.max().item():.4f}")
+                # print(f"softplus输出包含NaN: {torch.isnan(softplus_output).any()}")
                 
                 if torch.isnan(softplus_output).any():
                     print("softplus产生NaN，使用备用方案")
@@ -168,10 +168,10 @@ class Adapter(nn.Module):
                 print(f"softplus计算出错: {e}")
                 result = torch.full_like(fc_output_clamped, 0.1)
             
-            print(f"最终sigma输出范围: {result.min().item():.4f} to {result.max().item():.4f}")
+            # print(f"最终sigma输出范围: {result.min().item():.4f} to {result.max().item():.4f}")
             return result
         else:
-            print(f"最终mu输出范围: {fc_output.min().item():.4f} to {fc_output.max().item():.4f}")
+            # print(f"最终mu输出范围: {fc_output.min().item():.4f} to {fc_output.max().item():.4f}")
             return fc_output
 
 class TextEncoder(nn.Module):
