@@ -27,6 +27,7 @@ import random
 
 import os
 import errno
+from PIL import Image
 
 # for data transform -- todo: should be merge into data part
 import torchvision.transforms as transforms
@@ -48,8 +49,9 @@ class BufferDataset(Dataset):
     def __len__(self):
         return len(self.images)
     def __getitem__(self, idx):
-        img = self.images[idx]
+        img_path = self.images[idx]
         label = self.labels[idx]
+        img = Image.open(os.path.join(self.data_root, self.mode, img_path)).convert("RGB")
         if self.transform:
             img = self.transform(img)
         return img, label
@@ -940,7 +942,7 @@ class CLAP4CLIP(Finetune):
                     transforms.ToTensor(),  
                 ])
 
-                memory_loader = DataLoader(BufferDataset(image=buffer.images, label=buffer.labels,transform=buffer_transform),
+                memory_loader = DataLoader(BufferDataset(images=buffer.images, labels=buffer.labels,transform=buffer_transform),
                                            batch_size=buffer.batch_size, shuffle=True,num_workers=8, worker_init_fn=seed_worker,generator=g)
                 self.finetuning(memory_loader)
 
