@@ -42,7 +42,7 @@ except ImportError:
 from ..utils.clap4clip_utils import build_cosine_scheduler, freeze_parameters, init_weights, accuracy
 
 class BufferDataset(Dataset):
-    def __init__(self, images, labels, mode, data_root,transform=None):
+    def __init__(self, images, labels, mode, data_root, transform=None):
         self.images = images
         self.labels = labels
         self.transform = transform
@@ -944,7 +944,7 @@ class CLAP4CLIP(Finetune):
                     transforms.ToTensor(),  
                 ])
 
-                memory_loader = DataLoader(BufferDataset(images=buffer.images, labels=buffer.labels,transform=buffer_transform, mode='train', data_root='/root/autodl-tmp/cifar-100/cifar-100-dir/'),
+                memory_loader = DataLoader(BufferDataset(images=buffer.images, labels=buffer.labels,transform=buffer_transform, mode='train', data_root=self.kwargs["data_root"]),
                                            batch_size=buffer.batch_size, shuffle=True,num_workers=8, worker_init_fn=seed_worker,generator=g)
                 self.finetuning(memory_loader)
 
@@ -958,6 +958,10 @@ class CLAP4CLIP(Finetune):
         dtype = self.clip_model.dtype
         new_mu = Adapter(ctx_dim, ctx_dim).cuda(device=self.kwargs["default_gpu"]).type(dtype)
         new_sigma = Adapter(ctx_dim, ctx_dim, sigma=True).cuda(device=self.kwargs["default_gpu"]).type(dtype)
+        
+        print
+        
+        
         self.mu_adapters.append(new_mu)
         self.sigma_adapters.append(new_sigma)
         self.mu_adapters[:-1].eval()
