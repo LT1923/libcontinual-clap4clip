@@ -1050,8 +1050,8 @@ class CLAP4CLIP(Finetune):
         self.build_optimizer(per_epoch_steps=per_epoch_steps, lr=self.lr/10., warmup=False, finetune=True)
         if self.model.vga is not None:
             self.model.vga.eval()
-        for epoch in tqdm(range(self.kwargs["finetune_epochs"])):
-            for idx, (x, y, index) in tqdm(enumerate(memory_loader), total=len(memory_loader), desc = 'Finetuning'):
+        for epoch in tqdm(range(self.kwargs["finetune_epochs"])): 
+            for idx, (x, y) in tqdm(enumerate(memory_loader), total=len(memory_loader), desc = 'Finetuning'):
 
                 cur_iter_idx = epoch*per_epoch_steps+idx
                 self.cur_iter_idx = cur_iter_idx
