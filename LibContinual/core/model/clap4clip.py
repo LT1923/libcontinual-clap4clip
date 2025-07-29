@@ -42,10 +42,12 @@ except ImportError:
 from ..utils.clap4clip_utils import build_cosine_scheduler, freeze_parameters, init_weights, accuracy
 
 class BufferDataset(Dataset):
-    def __init__(self, images, labels, transform=None):
+    def __init__(self, images, labels, mode, data_root,transform=None):
         self.images = images
         self.labels = labels
         self.transform = transform
+        self.mode = mode
+        self.data_root = data_root
     def __len__(self):
         return len(self.images)
     def __getitem__(self, idx):
@@ -942,7 +944,7 @@ class CLAP4CLIP(Finetune):
                     transforms.ToTensor(),  
                 ])
 
-                memory_loader = DataLoader(BufferDataset(images=buffer.images, labels=buffer.labels,transform=buffer_transform),
+                memory_loader = DataLoader(BufferDataset(images=buffer.images, labels=buffer.labels,transform=buffer_transform, mode='train', data_root='/root/autodl-tmp/cifar-100/cifar-100-dir/'),
                                            batch_size=buffer.batch_size, shuffle=True,num_workers=8, worker_init_fn=seed_worker,generator=g)
                 self.finetuning(memory_loader)
 
