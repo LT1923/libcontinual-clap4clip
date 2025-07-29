@@ -16,8 +16,8 @@ except ImportError:
 
 def _create_transforms(cfg):
     transform_list = []
-
     for item in cfg:
+        print(item, type(item))
         for func_name, params in item.items():
         
             # Convert str to enum, if required
@@ -30,10 +30,15 @@ def _create_transforms(cfg):
 
             if func_name in cstf.custom_trfm_names:
                 transform = getattr(cstf, func_name)
+            elif func_name == "Lambda":  # !
+                transform = transforms.Lambda(eval(params['function']))
             else:
                 transform = getattr(transforms, func_name)(**params)
 
             transform_list.append(transform)
+            
+    print('-' * 70 + "transform_list" + '-' * 70)
+    print(transform_list)
 
     return transforms.Compose(transform_list)
 
