@@ -734,6 +734,8 @@ class CLAP4CLIP(Finetune):
 
         # model
         clip_model = backbone  # maybe
+        print("-" * 50 + "clip_model")
+        print(clip_model)
         clip_model.eval()
         if self.kwargs["use_float32"]:
             clip_model.float()
