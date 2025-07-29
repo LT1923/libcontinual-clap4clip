@@ -941,7 +941,12 @@ class CLAP4CLIP(Finetune):
                 g.manual_seed(0)
                 
                 buffer_transform = transforms.Compose([
-                    transforms.ToTensor(),  
+                    transforms.Resize(224, interpolation=BICUBIC),
+                    transforms.CenterCrop(224),
+                    lambda image: image.convert("RGB"),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.ToTensor(),
+                    transforms.Normalize((0.48145466, 0.4578275, 0.40821073),(0.26862954,0.26130258, 0.27577711)),
                 ])
 
                 memory_loader = DataLoader(BufferDataset(images=buffer.images, labels=buffer.labels,transform=buffer_transform, mode='train', data_root='/root/autodl-tmp/cifar-100/cifar-100-dir/'),
