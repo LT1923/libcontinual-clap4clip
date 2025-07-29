@@ -95,6 +95,7 @@ def balance_random_update(dataset, buffer):
 """
 
 def balance_random_update(dataset, buffer):
+    # todo: how to store images and labels as tensor instead of tuple?
     images = np.array(dataset.images + buffer.images)
     labels = np.array(dataset.labels + buffer.labels)
     

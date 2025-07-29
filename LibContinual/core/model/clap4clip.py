@@ -27,6 +27,7 @@ import random
 
 import os
 import errno
+from PIL import Image
 
 # for data transform -- todo: should be merge into data part
 import torchvision.transforms as transforms
@@ -41,15 +42,18 @@ except ImportError:
 from ..utils.clap4clip_utils import build_cosine_scheduler, freeze_parameters, init_weights, accuracy
 
 class BufferDataset(Dataset):
-    def __init__(self, images, labels, transform=None):
+    def __init__(self, images, labels, mode, data_root,transform=None):
         self.images = images
         self.labels = labels
         self.transform = transform
+        self.mode = mode
+        self.data_root = data_root
     def __len__(self):
         return len(self.images)
     def __getitem__(self, idx):
-        img = self.images[idx]
+        img_path = self.images[idx]
         label = self.labels[idx]
+        img = Image.open(os.path.join(self.data_root, self.mode, img_path)).convert("RGB")
         if self.transform:
             img = self.transform(img)
         return img, label
@@ -935,8 +939,12 @@ class CLAP4CLIP(Finetune):
 
                 g = torch.Generator()
                 g.manual_seed(0)
+                
+                buffer_transform = transforms.Compose([
+                    transforms.ToTensor(),  
+                ])
 
-                memory_loader = DataLoader(BufferDataset(buffer.images, buffer.labels),
+                memory_loader = DataLoader(BufferDataset(images=buffer.images, labels=buffer.labels,transform=buffer_transform, mode='train', data_root='/root/autodl-tmp/cifar-100/cifar-100-dir/'),
                                            batch_size=buffer.batch_size, shuffle=True,num_workers=8, worker_init_fn=seed_worker,generator=g)
                 self.finetuning(memory_loader)
 
@@ -1050,12 +1058,17 @@ class CLAP4CLIP(Finetune):
         self.build_optimizer(per_epoch_steps=per_epoch_steps, lr=self.lr/10., warmup=False, finetune=True)
         if self.model.vga is not None:
             self.model.vga.eval()
+
         for epoch in tqdm(range(self.kwargs["finetune_epochs"])): 
             for idx, (x, y) in tqdm(enumerate(memory_loader), total=len(memory_loader), desc = 'Finetuning'):
 
                 cur_iter_idx = epoch*per_epoch_steps+idx
                 self.cur_iter_idx = cur_iter_idx
                 self.scheduler.step(cur_iter_idx)
+                # fixed: transform y from tuple to tensor
+                y = torch.tensor(list(y), dtype=torch.long)
+                x = x.to(self.device)
+                y = y.to(self.device)
 
                 output, (kl_loss, prior_matching_loss, inter_adapter_distance) = self.model(x.cuda(device=self.kwargs["default_gpu"]), y, finetuning=True)
                 # pdb.set_trace()
