@@ -935,8 +935,12 @@ class CLAP4CLIP(Finetune):
 
                 g = torch.Generator()
                 g.manual_seed(0)
+                
+                buffer_transform = transforms.Compose([
+                    transforms.ToTensor(),  
+                ])
 
-                memory_loader = DataLoader(BufferDataset(buffer.images, buffer.labels),
+                memory_loader = DataLoader(BufferDataset(image=buffer.images, label=buffer.labels,transform=buffer_transform),
                                            batch_size=buffer.batch_size, shuffle=True,num_workers=8, worker_init_fn=seed_worker,generator=g)
                 self.finetuning(memory_loader)
 
@@ -1051,11 +1055,15 @@ class CLAP4CLIP(Finetune):
         if self.model.vga is not None:
             self.model.vga.eval()
         for epoch in tqdm(range(self.kwargs["finetune_epochs"])):
-            for idx, (x, y, index) in tqdm(enumerate(memory_loader), total=len(memory_loader), desc = 'Finetuning'):
+            for idx, (x, y) in tqdm(enumerate(memory_loader), total=len(memory_loader), desc = 'Finetuning'):
 
                 cur_iter_idx = epoch*per_epoch_steps+idx
                 self.cur_iter_idx = cur_iter_idx
                 self.scheduler.step(cur_iter_idx)
+                # fixed: transform y from tuple to tensor
+                y = torch.tensor(list(y), dtype=torch.long)
+                x = x.to(self.device)
+                y = y.to(self.device)
 
                 output, (kl_loss, prior_matching_loss, inter_adapter_distance) = self.model(x.cuda(device=self.kwargs["default_gpu"]), y, finetuning=True)
                 # pdb.set_trace()
