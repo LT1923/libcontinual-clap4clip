@@ -45,13 +45,17 @@ class BufferDataset(Dataset):
     def __init__(self, images, labels, mode, data_root, transform=None):
         self.images = images
         self.labels = labels
+        print("self.images")
+        print(self.images)
+        print(self.labels)
+        print(self.labels)
         self.transform = transform
         self.mode = mode
         self.data_root = data_root
     def __len__(self):
         return len(self.images)
     def __getitem__(self, idx):
-        img_path = self.images[idx]
+        img_path = self.images[idx]  # todo: 不对
         label = self.labels[idx]
         img = Image.open(os.path.join(self.data_root, self.mode, img_path)).convert("RGB")
         if self.transform:
@@ -76,10 +80,10 @@ class Adapter(nn.Module):
         self.sigma = sigma
         
         # 强制初始化
-        self._force_init_weights()
+        # self._force_init_weights()
         
         # print(f"Adapter created - sigma: {self.sigma}")
-        self._debug_weights()
+        # self._debug_weights()
         
     def _force_init_weights(self):
         """强制重新初始化权重"""
@@ -88,22 +92,22 @@ class Adapter(nn.Module):
                 # Sigma适配器：使用非常小的权重
                 self.fc[0].weight.fill_(0.001)  # 几乎为0的权重
                 self.fc[0].bias.fill_(-3.0)     # 较大的负偏置
-                # print("Sigma adapter: 强制初始化为小权重")
+                print("Sigma adapter: 强制初始化为小权重")
             else:
                 # Mu适配器：标准小权重初始化
                 nn.init.xavier_uniform_(self.fc[0].weight, gain=0.01)
                 nn.init.zeros_(self.fc[0].bias)
-                # print("Mu adapter: 标准初始化")
+                print("Mu adapter: 标准初始化")
     
     def _debug_weights(self):
         """调试权重信息"""
         weight = self.fc[0].weight
         bias = self.fc[0].bias
-        # print(f"  权重形状: {weight.shape}")
-        # print(f"  权重范围: {weight.min().item():.6f} to {weight.max().item():.6f}")
-        # print(f"  偏置范围: {bias.min().item():.6f} to {bias.max().item():.6f}")
-        # print(f"  权重是否包含NaN: {torch.isnan(weight).any()}")
-        # print(f"  偏置是否包含NaN: {torch.isnan(bias).any()}")
+        print(f"  权重形状: {weight.shape}")
+        print(f"  权重范围: {weight.min().item():.6f} to {weight.max().item():.6f}")
+        print(f"  偏置范围: {bias.min().item():.6f} to {bias.max().item():.6f}")
+        print(f"  权重是否包含NaN: {torch.isnan(weight).any()}")
+        print(f"  偏置是否包含NaN: {torch.isnan(bias).any()}")
 
     def forward(self, x):
         # print(f"\n=== Adapter Forward (sigma={self.sigma}) ===")
@@ -735,7 +739,7 @@ class CLAP4CLIP(Finetune):
             clip_model.float()
         self.clip_model = clip_model  # not equal to self.model, which is defined in self.init_model()
         ctx_dim = self.clip_model.ln_final.weight.shape[0]
-        # print("ctx_dim in self.clip_model in ClClipVar:",ctx_dim)  # 512
+        # print("ctx_dim in self.clip_model in ClClipVar:",ctx_dim)  # todo: 512... != 168...
 
         self.kwargs["lr"] = kwargs["lr"] * self.kwargs["train_batch_size"] / 20
         self.current_class_names = []
@@ -872,7 +876,27 @@ class CLAP4CLIP(Finetune):
         self.task_to_cls_num[task_idx] = len(train_loader.dataset.get_class_names())  # todo: why dataset has this attr--class_names
         self.current_class_names += train_loader.dataset.get_class_names()# fixed : dataset has no attribute named 'class_names'
         # self.prompt_templates = train_loader.dataset.prompt_templates  # DONE: 复杂。需要自己搓。不属于kwargs
-        self.prompt_templates = ["a photo of a {}."] # fixed: 相当于 cifar100 的 sigle templates, 还有 ensemble 方法没有实现
+        # self.prompt_templates = ["a photo of a {}."] # fixed: 相当于 cifar100 的 sigle templates, 还有 ensemble 方法没有实现
+        self.prompt_templates=[
+            'a photo of a {}.',
+            'a blurry photo of a {}.',
+            'a black and white photo of a {}.',
+            'a low contrast photo of a {}.',
+            'a high contrast photo of a {}.',
+            'a bad photo of a {}.',
+            'a good photo of a {}.',
+            'a photo of a small {}.',
+            'a photo of a big {}.',
+            'a photo of the {}.',
+            'a blurry photo of the {}.',
+            'a black and white photo of the {}.',
+            'a low contrast photo of the {}.',
+            'a high contrast photo of the {}.',
+            'a bad photo of the {}.',
+            'a good photo of the {}.',
+            'a photo of the small {}.',
+            'a photo of the big {}.',
+        ]
         # DONE: 如何利用 clap4clip 对 cifar100 自定义的类别顺序？好像不用，被注释掉了。
         self.cur_task_idx = task_idx
 

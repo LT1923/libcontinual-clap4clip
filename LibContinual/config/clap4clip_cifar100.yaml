@@ -9,8 +9,8 @@ n_gpu: 1
 default_gpu: 0
 
 # data
-# data_root: /root/autodl-tmp/ml_lab/data/cifar100/ # hlt's directory
-data_root: /root/autodl-tmp/cifar-100/cifar-100-dir/ # gyw's directory
+data_root: &data_root /root/autodl-tmp/ml_lab/data/cifar100/ # hlt's directory
+# data_root: /root/autodl-tmp/cifar-100/cifar-100-dir/ # gyw's directory
 image_size: &image_size 32
 num_workers: 8
 dataset: cifar100
@@ -64,7 +64,7 @@ classifier:
     num_class: *total_cls_num
     init_cls_num: *init_cls_num
     inc_cls_num: *inc_cls_num
-    feat_dim: 64
+    feat_dim: 768  # 64
 
     # for CLAP4CLIP
     default_gpu: 0
@@ -96,6 +96,8 @@ classifier:
     ortho_loss: False
     get_adapter_distances: False
     finetune_epochs: 2
+
+    data_root: *data_root
 
     # maybe useless
     lr: 0.1

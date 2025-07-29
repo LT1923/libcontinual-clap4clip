@@ -70,6 +70,7 @@ class CLIP(nn.Module):
         self.current_class_names = class_names
         # prompt learner
         ctx_dim = clip_model.ln_final.weight.shape[0]
+        # print("ctx_dim in self.clip_model in ClClipVar:",ctx_dim)  # 768
         dtype = clip_model.dtype
         if previous_components is not None:
             self.unpack_prev_components(previous_components)
@@ -103,13 +104,16 @@ class CLIP(nn.Module):
     
     def init_new_heads(self):
         def get_new_task_embed(var=False):
+            print("self.frozen_text_features_individual")
+            print(self.frozen_text_features_individual.shape)
             if var:
                 new_class_embeds = self.frozen_text_features_individual.var(1)
             else:
                 new_class_embeds = self.frozen_text_features_individual.mean(1)
             layer_embeds = new_class_embeds.t() @ new_class_embeds
             # layer_embeds = layer_embeds / layer_embeds.norm()
-            layer_embeds = layer_embeds / layer_embeds.shape[0]   
+            layer_embeds = layer_embeds / layer_embeds.shape[0]  
+             
             return layer_embeds  
         def init_with_task_embed(module, var=False):
             layer_embeds = get_new_task_embed(var=var)

@@ -564,7 +564,7 @@ class Trainer(object):
 
 
         for b, batch in tqdm(enumerate(dataloader), total=total, disable=(self.rank != 0)):
-
+            
             batch['batch_id'] = b
             # These method's LR is updated every iterations, not epochs
             if self.config['classifier']['name'] in ['MOE_ADAPTER4CL', 'DMNSP', 'DMNSP_CIL']:
