@@ -1099,7 +1099,7 @@ class CLAP4CLIP(Finetune):
                 self.scheduler.step(cur_iter_idx)
                 # fixed: transform y from tuple to tensor
                 # print(f"Finetuning epoch {epoch}, step {idx}")
-                print("Here Finetuning y:", y,"for task", self.cur_task_idx)  # for debug
+                # print("Here Finetuning y:", y,"for task", self.cur_task_idx)  # for debug
                 y = torch.tensor(list(y), dtype=torch.long)
                 x = x.to(self.device)
                 y = y.to(self.device)
@@ -1123,13 +1123,13 @@ class CLAP4CLIP(Finetune):
                 # DONE: accuracy的计算方法不对。参考clap4clip/classifier/evaluator.py和clap4clip/utils/eval.py
                 # print("Observe loss:",loss)
                 acc = top1_acc.item() / 100.0
-                print("Finetune Accuracy:", acc) # Finetune Accuracy不为0，
+                # print("Finetune Accuracy:", acc) # Finetune Accuracy不为0，
                 ##### debug finish ######
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
                 
-                print("Finetune inter adapter distance:", inter_adapter_distance,"For Task", self.cur_task_idx, "Epoch", epoch, "Step", idx)
+                # print("Finetune inter adapter distance:", inter_adapter_distance,"For Task", self.cur_task_idx, "Epoch", epoch, "Step", idx)
 
                 if inter_adapter_distance is not None and (epoch == self.epochs-1):
                         inter_adapter_distances.append(inter_adapter_distance)

@@ -394,7 +394,7 @@ class Trainer(object):
                     elif self.buffer.strategy == 'balance_random':
                         balance_random_update(self.train_loader.get_loader(task_idx).dataset, self.buffer)
                         
-            if hasattr(model, 'after_task'):
+            if hasattr(model, 'after_task') and method_name == "CLAP4CLIP":
                 model.after_task(task_idx, self.buffer, self.train_loader.get_loader(task_idx), self.test_loader.get_loader(task_idx))
 
 
@@ -435,9 +435,6 @@ class Trainer(object):
 
                     #bias_scheduler.step()
             
-            if method_name == "CLAP4CLIP":
-                model.after_task(task_idx, self.buffer, self.train_loader.get_loader(task_idx), self.test_loader.get_loader(task_idx))
-
             for test_idx in range(testing_times):
                 if self.rank == 0:
                     print(f"================Test {test_idx+1}/{testing_times} of Task {task_idx}!================")

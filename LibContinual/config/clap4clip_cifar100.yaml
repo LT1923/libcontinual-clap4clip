@@ -9,8 +9,8 @@ n_gpu: 1
 default_gpu: 0
 
 # data
-# data_root: &data_root /root/autodl-tmp/ml_lab/data/cifar100/ # hlt's directory
-data_root: &data_root /root/autodl-tmp/cifar-100/cifar-100-dir/ # gyw's directory
+data_root: &data_root /root/autodl-tmp/ml_lab/data/cifar100/ # hlt's directory
+# data_root: &data_root /root/autodl-tmp/cifar-100/cifar-100-dir/ # gyw's directory
 image_size: &image_size 32
 num_workers: 8
 dataset: cifar100
@@ -23,8 +23,8 @@ inc_cls_num: &inc_cls_num 10
 total_cls_num: &total_cls_num 100
 task_num: 10
 warmup: 1
-epoch: 5
-val_per_epoch: 5 # according to num_test in parse_option()
+epoch: 8
+val_per_epoch: 8 # according to num_test in parse_option()
 train_batch_size: &train_batch_size 32
 test_batch_size: 32
 seed: 0
