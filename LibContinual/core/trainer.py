@@ -171,7 +171,12 @@ class Trainer(object):
         elif config['lr_scheduler']['name'] == "CosineAnnealingWarmUp":
             T_max = len(self.train_loader.get_loader(self.task_idx))
             T_max *= init_epoch if self.task_idx == 0 else config['epoch']
-            scheduler = CosineAnnealingWarmUp(optimizer, config['lr_scheduler']['kwargs']['warmup_length'], T_max)
+            if config['classifier']['name'] == 'CLAP4CLIP':
+                warmup_length = int(0.3 * T_max)
+                T_max -= warmup_length  # in clap4clip
+                scheduler = CosineAnnealingWarmUp(optimizer, warmup_length, T_max)
+            else:  
+                scheduler = CosineAnnealingWarmUp(optimizer, config['lr_scheduler']['kwargs']['warmup_length'], T_max)
         else:
             scheduler = get_instance(torch.optim.lr_scheduler, "lr_scheduler", config, optimizer=optimizer)
 

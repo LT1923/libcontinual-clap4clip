@@ -1086,8 +1086,7 @@ class CLAP4CLIP(Finetune):
             
         per_epoch_steps=len(memory_loader)
         inter_adapter_distances = []
-        self.build_optimizer(per_epoch_steps=per_epoch_steps, lr=self.lr/1000, warmup=False, finetune=True)
-        print("finetune lr = ", self.lr/1000,"for task", self.cur_task_idx)
+        self.build_optimizer(per_epoch_steps=per_epoch_steps, lr=self.lr/10, warmup=False, finetune=True)
         if self.model.vga is not None:
             self.model.vga.eval()
 

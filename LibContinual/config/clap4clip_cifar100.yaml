@@ -38,10 +38,8 @@ optimizer:
     weight_decay: 0.0
 
 lr_scheduler:
-  name: MultiStepLR  # todo
+  name: CosineAnnealingWarmUp  # DONE
   kwargs:
-    gamma: 0.1
-    milestones: [80, 120]
 
 # model
 backbone:
@@ -99,13 +97,8 @@ classifier:
 
     data_root: *data_root
 
-    # maybe useless
-    lr: 0.1
-    wd: 0
-    dist: 0.5
-    lamda: 5
-    K: 2
-    lw_mr: 1
+    lr: 1e-3
+    wd: 0.0
 
 
 train_trfms:
