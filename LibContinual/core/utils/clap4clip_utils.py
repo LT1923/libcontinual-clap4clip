@@ -121,6 +121,8 @@ class build_cosine_scheduler:
         init_lr = 0
         final_lr = lr * 1e-3
         self.lrs = cosine_schedule_warmup(total_step, lr, final_lr, lr_warmup_step, init_lr)
+        print("self.lrs top 100")
+        print(self.lrs[:100])
         self.optimizer = optimizer
 
     def step(self,idx):

@@ -23,8 +23,8 @@ inc_cls_num: &inc_cls_num 10
 total_cls_num: &total_cls_num 100
 task_num: 10
 warmup: 1
-epoch: 8
-val_per_epoch: 8 # according to num_test in parse_option()
+epoch: 5
+val_per_epoch: 5 # according to num_test in parse_option()
 train_batch_size: &train_batch_size 32
 test_batch_size: 32
 seed: 0
@@ -36,10 +36,6 @@ optimizer:
     lr: 1e-3
     # momentum: 0.9  # DONE: do not need momentum
     weight_decay: 0.0
-
-lr_scheduler:
-  name: CosineAnnealingWarmUp  # DONE
-  kwargs:
 
 # model
 backbone:
