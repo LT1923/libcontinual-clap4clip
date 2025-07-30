@@ -378,7 +378,7 @@ class Trainer(object):
                     
                 torch.cuda.empty_cache()  # add for cuda constraint
 
-            if hasattr(model, 'after_task'):
+            if hasattr(model, 'after_task') and method_name != "CLAP4CLIP":
                 model.after_task(task_idx, self.buffer, self.train_loader.get_loader(task_idx), self.test_loader.get_loader(task_idx))
 
             # Update Buffer
@@ -428,6 +428,9 @@ class Trainer(object):
                             print(f" * Per-Task Acc: {per_task_acc}")
 
                     #bias_scheduler.step()
+            
+            if method_name == "CLAP4CLIP":
+                model.after_task(task_idx, self.buffer, self.train_loader.get_loader(task_idx), self.test_loader.get_loader(task_idx))
 
             for test_idx in range(testing_times):
                 if self.rank == 0:
