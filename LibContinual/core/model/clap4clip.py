@@ -45,10 +45,10 @@ class BufferDataset(Dataset):
     def __init__(self, images, labels, mode, data_root, transform=None):
         self.images = images
         self.labels = labels
-        print("self.images")
-        print(self.images)
-        print(self.labels)
-        print(self.labels)
+        # print("self.images")
+        # print(self.images)
+        # print(self.labels)
+        # print(self.labels)
         self.transform = transform
         self.mode = mode
         self.data_root = data_root
@@ -211,7 +211,6 @@ class CLIP(nn.Module):
         self.cur_task_idx = cur_task_idx
         self.n_class = len(class_names)
         self.kwargs = kwargs
-        self.cur_task_idx = cur_task_idx
         # self.args = args
         # text encoder
         self.text_encoder = TextEncoder(clip_model)
@@ -735,8 +734,10 @@ class CLAP4CLIP(Finetune):
         # model
         clip_model = backbone  # maybe
         clip_model.eval()
+        
         if self.kwargs["use_float32"]:
             clip_model.float()
+        self.backbone = backbone
         self.clip_model = clip_model  # not equal to self.model, which is defined in self.init_model()
         ctx_dim = self.clip_model.ln_final.weight.shape[0]
         # print("ctx_dim in self.clip_model in ClClipVar:",ctx_dim)  # todo: 512... != 168...
@@ -987,7 +988,7 @@ class CLAP4CLIP(Finetune):
         new_mu = Adapter(ctx_dim, ctx_dim).cuda(device=self.kwargs["default_gpu"]).type(dtype)
         new_sigma = Adapter(ctx_dim, ctx_dim, sigma=True).cuda(device=self.kwargs["default_gpu"]).type(dtype)
         
-        print
+
         
         
         self.mu_adapters.append(new_mu)
@@ -1076,7 +1077,9 @@ class CLAP4CLIP(Finetune):
             print(f"Updated cur_task_idx to {task_idx}")
     
     def finetuning(self, memory_loader):
-        # todo: use buffer for finetuning instead of memory_loader
+        # DONE: use buffer for finetuning instead of memory_loader
+        # todo: add finetune and current task accuracy on test become 0?
+        print("+++++ Finetuning +++++")
         self.unfreeze_for_finetuning()
         self.cur_iter_idx = 0
         if len(memory_loader.dataset)< self.kwargs["train_batch_size"]:
@@ -1087,7 +1090,8 @@ class CLAP4CLIP(Finetune):
             
         per_epoch_steps=len(memory_loader)
         inter_adapter_distances = []
-        self.build_optimizer(per_epoch_steps=per_epoch_steps, lr=self.lr/10., warmup=False, finetune=True)
+        self.build_optimizer(per_epoch_steps=per_epoch_steps, lr=self.lr/1000, warmup=False, finetune=True)
+        print("finetune lr = ", self.lr/1000,"for task", self.cur_task_idx)
         if self.model.vga is not None:
             self.model.vga.eval()
 
@@ -1098,6 +1102,8 @@ class CLAP4CLIP(Finetune):
                 self.cur_iter_idx = cur_iter_idx
                 self.scheduler.step(cur_iter_idx)
                 # fixed: transform y from tuple to tensor
+                # print(f"Finetuning epoch {epoch}, step {idx}")
+                print("Here Finetuning y:", y,"for task", self.cur_task_idx)  # for debug
                 y = torch.tensor(list(y), dtype=torch.long)
                 x = x.to(self.device)
                 y = y.to(self.device)
@@ -1113,9 +1119,21 @@ class CLAP4CLIP(Finetune):
                 else:
                     targets = y 
                 loss = loss + F.cross_entropy(output, targets) + kl_loss + prior_matching_loss
+                # print("output shape:", output.shape)
+                pred = torch.argmax(output, dim=1)  # DONE: ok! output shape: torch.Size([640, 10])
+                # fixed: pred和y的维度不匹配！pred shape: torch.Size([640]), y shape: torch.Size([32]) 改用target: torch.Size([640])
+                top1_acc = accuracy(output, targets, topk=(1,))[0]  # 计算top-1准确率  # DONE: dim ok??? 
+                # print(f"Predictions: {pred}, Targets: {targets}, Accuracy: {acc / x.size(0)}, Loss: {loss.item()}")  # for debug
+                # DONE: accuracy的计算方法不对。参考clap4clip/classifier/evaluator.py和clap4clip/utils/eval.py
+                # print("Observe loss:",loss)
+                acc = top1_acc.item() / 100.0
+                print("Finetune Accuracy:", acc) # Finetune Accuracy不为0，
+                ##### debug finish ######
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
+                
+                print("Finetune inter adapter distance:", inter_adapter_distance,"For Task", self.cur_task_idx, "Epoch", epoch, "Step", idx)
 
                 if inter_adapter_distance is not None and (epoch == self.epochs-1):
                         inter_adapter_distances.append(inter_adapter_distance)

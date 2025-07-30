@@ -397,7 +397,7 @@ class CLIP(nn.Module):
 
         return x
 
-    def forward(self, image, text, **kwargs):
+    def forward(self, image=None, text=None, **kwargs):
         if image is None:
             return self.encode_text(text, **kwargs)
         elif text is None:
