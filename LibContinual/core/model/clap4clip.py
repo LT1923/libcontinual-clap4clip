@@ -45,10 +45,6 @@ class BufferDataset(Dataset):
     def __init__(self, images, labels, mode, data_root, transform=None):
         self.images = images
         self.labels = labels
-        # print("self.images")
-        # print(self.images)
-        # print(self.labels)
-        # print(self.labels)
         self.transform = transform
         self.mode = mode
         self.data_root = data_root

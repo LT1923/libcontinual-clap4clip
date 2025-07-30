@@ -665,4 +665,6 @@ def tokenize(texts: Union[str, List[str]], context_length: int = 77) -> torch.Lo
     return result
 
 def clip(model_name, device, jit = False, pretrained = False, **kwargs):
+    model = load(model_name, device, jit, pretrained, **kwargs)
+    print(model.ln_final.weight.shape[0])
     return load(model_name, device, jit, pretrained, **kwargs)
