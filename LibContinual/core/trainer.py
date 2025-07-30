@@ -300,6 +300,8 @@ class Trainer(object):
 
             elif isinstance(self.buffer, (LinearBuffer, LinearHerdingBuffer)) and self.buffer.buffer_size > 0 and task_idx > 0:
                 datasets = dataloader.dataset
+                # print("Here dataset.images: ", datasets.images)
+                # print("Here dataset.labels: ", datasets.labels)
                 datasets.images.extend(self.buffer.images)
                 datasets.labels.extend(self.buffer.labels)
                 dataloader = DataLoader(
@@ -391,6 +393,10 @@ class Trainer(object):
                         random_update(self.train_loader.get_loader(task_idx).dataset, self.buffer)
                     elif self.buffer.strategy == 'balance_random':
                         balance_random_update(self.train_loader.get_loader(task_idx).dataset, self.buffer)
+                        
+            if hasattr(model, 'after_task'):
+                model.after_task(task_idx, self.buffer, self.train_loader.get_loader(task_idx), self.test_loader.get_loader(task_idx))
+
 
             # Stage 2 Training : BIC (Stage 2 start after buffer being updated)
             if self.config["classifier"]["name"] == "bic" and task_idx > 0:
@@ -599,6 +605,8 @@ class Trainer(object):
     def _validate(self, task_idx):
 
         dataloaders = self.test_loader.get_loader(task_idx)
+        # print(f"Testing on Task {task_idx} data...")
+        # print(f"Total {len(dataloaders)} batches")
 
         model = self.model.module if self.distribute else self.model
 
@@ -616,11 +624,15 @@ class Trainer(object):
                 correct_task, count_task = 0, 0
 
                 for batch in tqdm(dataloader, desc = f"Testing on Task {t} data", disable=self.rank != 0):  # Disable tqdm for non-master processes
+                    # print(f"Testing on Task {t} data, batch size: {batch['image'].shape[0]}")
                     
                     if self.config['setting'] == 'task-aware':
                         output, acc = model.inference(batch, task_id=t)
                     elif self.config['setting'] == 'task-agnostic':
+                        # print('Here task agnostic validate') # CLAP4CLIP on this branch
                         output, acc = model.inference(batch)
+                        #print(f"Task {t} inference output shape: {output.shape}")
+                        #print(f"Task {t} inference acc: {acc}")
                     
                     correct_task += int(acc * batch['label'].shape[0])
                     count_task += batch['label'].shape[0]
