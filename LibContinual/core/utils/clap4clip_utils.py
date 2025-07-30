@@ -124,12 +124,16 @@ class build_cosine_scheduler:
         print("self.lrs top 100")
         print(self.lrs[:100])
         self.optimizer = optimizer
+        self.lr = lr
 
     def step(self,idx):
         lr = self.lrs[idx]
         for i, param_group in enumerate(self.optimizer.param_groups):
             param_group["lr"]= lr
         self.lr=lr
+    
+    def get_last_lr(self):
+        return self.lr
 
 class build_bicosine_scheduler:
     def __init__(self, optimizer, lr, total_step, lr_warmup_step=0):
