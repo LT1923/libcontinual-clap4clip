@@ -173,9 +173,9 @@ class Trainer(object):
             T_max *= init_epoch if self.task_idx == 0 else config['epoch']
             scheduler = CosineAnnealingWarmUp(optimizer, config['lr_scheduler']['kwargs']['warmup_length'], T_max)
         elif config['classifier']['name'] == 'CLAP4CLIP':
-            lr = config['optimizer']['lr']
+            lr = config['lr_scheduler']['kwargs']['lr']
             epochs = config['epoch']
-            per_epoch_steps = len(self.train_loader)
+            per_epoch_steps = len(self.train_loader.get_loader(self.task_idx))
             total_step = epochs * per_epoch_steps
             warmup_steps = int(0.3 * total_step)
             from .utils.clap4clip_utils import build_cosine_scheduler
@@ -184,7 +184,7 @@ class Trainer(object):
                 lr=lr,
                 total_step=total_step,
                 lr_warmup_step=warmup_steps
-                )
+            )
         else:
             scheduler = get_instance(torch.optim.lr_scheduler, "lr_scheduler", config, optimizer=optimizer)
 
@@ -388,7 +388,7 @@ class Trainer(object):
                         if self.rank == 0:
                             print(f"{self.scheduler.get_last_lr()} < {self.config['lr_scheduler']['kwargs']['stopping_lr']}, stopping this task now")
                         break
-                else:
+                elif method_name != "CLAP4CLIP":
                     self.scheduler.step()
                     
                 torch.cuda.empty_cache()  # add for cuda constraint

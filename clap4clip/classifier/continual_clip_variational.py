@@ -678,10 +678,6 @@ class ClClipVariational(Evaluator):
             self.model.vga.eval()
         for epoch in tqdm(range(self.args.finetune_epochs)):
             for idx, (x, y, index) in tqdm(enumerate(memory_loader), total=len(memory_loader), desc = 'Finetuning'):
-                print("x:",x)
-                print("y:",y)
-                print("index:",index)
-                return
                 cur_iter_idx = epoch*per_epoch_steps+idx
                 self.cur_iter_idx = cur_iter_idx
                 self.scheduler.step(cur_iter_idx)

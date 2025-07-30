@@ -51,6 +51,11 @@ buffer:
     batch_size: *train_batch_size
     strategy: balance_random # fixed: already used in LinearHerdingBuffer
 
+lr_scheduler:
+  name: CLAP4CLIPScheduler
+  kwargs:
+    lr: 1e-3
+
 classifier: 
   name: CLAP4CLIP
   kwargs:
