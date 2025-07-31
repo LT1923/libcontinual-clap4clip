@@ -764,11 +764,6 @@ class CLAP4CLIP(Finetune):
 
         # fixed: task 索引的初始化
         self.cur_task_idx = 0
-
-        # directories
-        self.save_path = kwargs["save_path"]
-        self.ckpt_path = self.kwargs["ckpt_path"] 
-        self.checkpoint = self.kwargs["checkpoint"]
         
         # fixed: 应用数据变换 todo: 为什么变换之后准确率骤降成20%？
         self.train_transforms_list = [
@@ -800,12 +795,6 @@ class CLAP4CLIP(Finetune):
                     pass
                 else:
                     raise
-
-        if not os.path.isdir(self.kwargs["ckpt_path"]):
-            mkdir_p(self.kwargs["checkpoint"])
-        if not os.path.isdir(self.kwargs["save_path"]):
-            mkdir_p(self.kwargs["save_path"])
-        np.save(self.kwargs["checkpoint"] + "/seed.npy", self.kwargs["seed"])
         
         # fixed: 没这个定义跑不了, args改成kwargs
     def init_task_tokens(self, ctx_dim):
@@ -908,12 +897,6 @@ class CLAP4CLIP(Finetune):
         if self.model.vga is not None:
             self.model.vga.train()
             
-        # todo: memory
-        # if task_idx > 0:
-        #     with open(self.save_path + "memory_"+str(task_idx)+".pickle", "rb") as f:
-        #         buf = pickle.load(f)
-        #         buffer.images = list(buf["images"])
-        #         buffer.labels = list(buf["labels"])
         
     def get_current_task_class_indexes(self, task_idx):
         """计算当前任务的类别索引"""
@@ -939,19 +922,6 @@ class CLAP4CLIP(Finetune):
         #     self.compute_adapter_distances()
         
         if task_idx > 0:
-        #     trsf = transforms.Compose([
-        #     transforms.Resize(224, interpolation=BICUBIC, antialias=True),
-        #     transforms.CenterCrop(224),
-        #     lambda image: image.convert("RGB"),
-        #     transforms.RandomHorizontalFlip(),
-        #     transforms.ToTensor(),
-        #     transforms.Normalize((0.48145466, 0.4578275, 0.40821073),
-        #                        (0.26862954, 0.26130258, 0.27577711)),
-        # ])
-        #     buffer.update(self.model, train_loader, trsf, task_idx, self.kwargs["total_cls_num"], cur_cls_indexes, self.device)  # ???
-        #     buffer.reduce_old_data(task_idx, self.kwargs["total_cls_num"])
-        #     with open(self.kwargs["save_path"] + "memory_"+str(task_idx)+".pickle", "wb") as f:
-        #         pickle.dump({"images": buffer.images, "labels": buffer.lables}, f)
             if self.kwargs["finetune"] and buffer is not None:
                 def seed_worker(worker_id):
                     worker_seed = torch.initial_seed() % 2 ** 32
@@ -1056,11 +1026,6 @@ class CLAP4CLIP(Finetune):
                            cur_task_idx=cur_task_idx # to maintain current task index
                           )  # diy CLIP
         self.model.eval()
-        if self.kwargs["use_grad_checkpoint"]:
-            try:
-                self.model.text_encoder.transformer.use_gradient_checkpoint = True 
-            except:
-                self.model.text_encoder.module.transformer.use_gradient_checkpoint = True
 
 
         self.build_optimizer(per_epoch_steps, lr=self.lr, warmup=True)

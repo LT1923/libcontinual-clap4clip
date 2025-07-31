@@ -23,8 +23,8 @@ inc_cls_num: &inc_cls_num 10
 total_cls_num: &total_cls_num 100
 task_num: 10
 warmup: 1
-epoch: 8
-val_per_epoch: 8 # according to num_test in parse_option()
+epoch: 5
+val_per_epoch: 5 # according to num_test in parse_option()
 train_batch_size: &train_batch_size 32
 test_batch_size: 32
 seed: 0
@@ -60,7 +60,7 @@ buffer:
   kwargs:
     buffer_size: 2000
     batch_size: *train_batch_size
-    strategy: balance_random # fixed: already used in LinearHerdingBuffer
+    strategy: balance_random
 
 classifier: 
   name: CLAP4CLIP
@@ -74,14 +74,10 @@ classifier:
     # for CLAP4CLIP
     default_gpu: 0
     use_float32: False
-    use_grad_checkpoint: False
     use_vga: True
     hierarchical: False
     train_batch_size:  *train_batch_size
-    ckpt_path: todo
-    checkpoint: ckpt/
-    save_path: save/
-    seed: 0 # todo: 两个seed用法一致吗？
+    seed: 0
     variational: True # 变分模式推理
     total_cls_num: *total_cls_num
     finetune: True
@@ -104,13 +100,8 @@ classifier:
 
     data_root: *data_root
 
-    # maybe useless
-    lr: 0.1
-    wd: 0
-    dist: 0.5
-    lamda: 5
-    K: 2
-    lw_mr: 1
+    lr: 1e-3
+    wd: 0.0
 
 
 train_trfms:
