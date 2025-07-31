@@ -49,12 +49,18 @@ buffer:
   kwargs:
     buffer_size: 2000
     batch_size: *train_batch_size
-    strategy: balance_random # fixed: already used in LinearHerdingBuffer
+    strategy: balance_random
 
-lr_scheduler:
-  name: CLAP4CLIPScheduler
+# lr_scheduler:
+#   name: CLAP4CLIPScheduler
+#   kwargs:
+#     lr: 1e-3
+
+lr_scheduler:  # ref: add_a_new_method.md 
+  name: MultiStepLR
   kwargs:
-    lr: 1e-3
+    gamma: 0.1
+    milestones: [80, 120]
 
 classifier: 
   name: CLAP4CLIP
@@ -72,9 +78,6 @@ classifier:
     use_vga: True
     hierarchical: False
     train_batch_size:  *train_batch_size
-    ckpt_path: todo
-    checkpoint: ckpt/
-    save_path: save/
     seed: 0 # todo: 两个seed用法一致吗？
     variational: True # 变分模式推理
     total_cls_num: *total_cls_num
