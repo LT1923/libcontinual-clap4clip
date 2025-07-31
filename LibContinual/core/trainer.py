@@ -172,6 +172,19 @@ class Trainer(object):
             T_max = len(self.train_loader.get_loader(self.task_idx))
             T_max *= init_epoch if self.task_idx == 0 else config['epoch']
             scheduler = CosineAnnealingWarmUp(optimizer, config['lr_scheduler']['kwargs']['warmup_length'], T_max)
+        elif config['lr_scheduler']['name'] == 'CLAP4CLIPScheduler':
+            lr = config['lr_scheduler']['kwargs']['lr']
+            epochs = config['epoch']
+            per_epoch_steps = len(self.train_loader.get_loader(self.task_idx))
+            total_step = epochs * per_epoch_steps
+            warmup_steps = int(0.3 * total_step)
+            from .utils.clap4clip_utils import build_cosine_scheduler
+            scheduler = build_cosine_scheduler(
+                optimizer,
+                lr=lr,
+                total_step=total_step,
+                lr_warmup_step=warmup_steps
+            )
         else:
             scheduler = get_instance(torch.optim.lr_scheduler, "lr_scheduler", config, optimizer=optimizer)
 
@@ -375,7 +388,7 @@ class Trainer(object):
                         if self.rank == 0:
                             print(f"{self.scheduler.get_last_lr()} < {self.config['lr_scheduler']['kwargs']['stopping_lr']}, stopping this task now")
                         break
-                else:
+                elif self.config['lr_scheduler']['name'] != "CLAP4CLIPScheduler":
                     self.scheduler.step()
                     
                 torch.cuda.empty_cache()  # add for cuda constraint
@@ -573,7 +586,8 @@ class Trainer(object):
             
             batch['batch_id'] = b
             # These method's LR is updated every iterations, not epochs
-            if self.config['classifier']['name'] in ['MOE_ADAPTER4CL', 'DMNSP', 'DMNSP_CIL']:
+            if self.config['classifier']['name'] in ['MOE_ADAPTER4CL', 'DMNSP', 'DMNSP_CIL'] or \
+               self.config['lr_scheduler']['name'] == "CLAP4CLIPScheduler":
                 self.scheduler.step(total * epoch_idx + b)
 
             if self.config["classifier"]["name"] in ['TRGP', 'DMNSP', 'DMNSP_CIL', 'TRGP_CLIP', 
